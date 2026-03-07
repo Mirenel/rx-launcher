@@ -1,0 +1,301 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Project Rx</title>
+  <link rel="stylesheet" href="fonts.css">
+  <link rel="stylesheet" href="app.css">
+  <script src="/app.js" defer></script>
+</head>
+<body>
+
+  <!-- Window controls (floating) -->
+  <div class="drag-zone" id="drag-zone"></div>
+  <div class="window-controls">
+    <div class="wc-btn" id="btn-minimize">&#x2013;</div>
+    <div class="wc-btn wc-close" id="btn-close">&#x2715;</div>
+  </div>
+
+  <!-- Main layout -->
+  <div class="launcher">
+
+    <!-- Sidebar -->
+    <aside class="sidebar">
+      <div class="sidebar-logo">
+        <div class="logo-glow"></div>
+        <img src="/images/rx1.webp" alt="Project Rx" class="logo-img" draggable="false">
+      </div>
+
+      <div class="sidebar-rule">
+        <span class="rule-line"></span>
+        <span class="rule-rune">ᚷᛁᚾᚾᚨᚱᚢᚾᚨᛉ</span>
+        <span class="rule-line"></span>
+      </div>
+
+      <div class="server-status" id="server-status">
+        <div class="status-dot offline" id="status-dot"></div>
+        <div class="status-info">
+          <span class="status-label" id="status-label">Checking...</span>
+          <span class="status-players" id="status-players"></span>
+        </div>
+      </div>
+
+      <nav class="sidebar-nav">
+        <button class="nav-item active" data-tab="news">
+          <span class="nav-gem">&#9670;</span> News
+        </button>
+        <button class="nav-item" data-tab="patch">
+          <span class="nav-gem">&#9670;</span> Patch
+        </button>
+        <button class="nav-item" data-tab="settings">
+          <span class="nav-gem">&#9670;</span> Settings
+        </button>
+      </nav>
+
+      <div class="sidebar-bottom">
+        <div class="sidebar-patch-status" id="sidebar-patch-status">Patch required</div>
+        <button class="play-btn" id="play-btn" disabled>
+          <span class="play-btn-text">Play</span>
+        </button>
+        <button class="sidebar-changelog" id="changelog-btn">Changelog v0.1.0</button>
+      </div>
+    </aside>
+
+    <!-- Content area -->
+    <main class="content">
+
+      <!-- News tab -->
+      <section class="tab-panel active" id="tab-news">
+        <div class="content-header">
+          <div class="content-eyebrow">
+            <span class="eyebrow-line"></span>
+            <span class="eyebrow-text">Dispatches</span>
+            <span class="eyebrow-line"></span>
+          </div>
+          <h2 class="content-title">News &amp; Announcements</h2>
+          <div class="content-ornament">
+            <span class="orn-line"></span>
+            <span class="orn-gem">&#9670;</span>
+            <span class="orn-gem orn-gem-sm">&#9670;</span>
+            <span class="orn-gem">&#9670;</span>
+            <span class="orn-line"></span>
+          </div>
+        </div>
+        <div class="news-list" id="news-list">
+          <div class="news-placeholder">Loading...</div>
+        </div>
+        <div class="panel-footer">Project Rx &copy; 2026. All rights reserved.</div>
+      </section>
+
+      <!-- Patch tab -->
+      <section class="tab-panel" id="tab-patch">
+        <div class="content-header">
+          <div class="content-eyebrow">
+            <span class="eyebrow-line"></span>
+            <span class="eyebrow-text">Updates</span>
+            <span class="eyebrow-line"></span>
+          </div>
+          <h2 class="content-title">Patch Manager</h2>
+          <div class="content-ornament">
+            <span class="orn-line"></span>
+            <span class="orn-gem">&#9670;</span>
+            <span class="orn-gem orn-gem-sm">&#9670;</span>
+            <span class="orn-gem">&#9670;</span>
+            <span class="orn-line"></span>
+          </div>
+        </div>
+        <div class="patch-cards">
+          <div class="patch-card">
+            <span class="patch-card__label">Server Version</span>
+            <span class="patch-card__value" id="patch-current">v1.00</span>
+          </div>
+          <div class="patch-card">
+            <span class="patch-card__label">Installed</span>
+            <span class="patch-card__value patch-not-installed" id="patch-installed">Not Installed</span>
+          </div>
+          <div class="patch-card">
+            <span class="patch-card__label">Wow.exe</span>
+            <span class="patch-card__value" id="wow-exe-status">Checking...</span>
+          </div>
+        </div>
+        <div class="patch-install-path" id="patch-install-path"></div>
+        <div class="patch-download-area">
+          <div class="patch-btn-row">
+            <button class="patch-download-btn" id="download-patch-btn" disabled>Download Patch</button>
+            <span class="patch-status hidden" id="patch-status">
+              <svg class="patch-status__icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"/></svg>
+              Up to Date
+            </span>
+            <button class="patch-repair-btn hidden" id="repair-btn">Repair</button>
+            <button class="patch-uninstall-btn hidden" id="uninstall-btn">Uninstall</button>
+          </div>
+          <div class="patch-no-path" id="patch-no-path">Set your game directory in Settings first</div>
+          <div class="patch-progress" id="patch-progress">
+            <span class="patch-progress-text" id="patch-progress-text">0%</span>
+            <div class="patch-progress-track">
+              <div class="patch-progress-fill" id="patch-progress-fill"></div>
+            </div>
+          </div>
+          <div class="patch-log" id="patch-log"></div>
+        </div>
+        <div class="panel-footer">Project Rx &copy; 2026. All rights reserved.</div>
+      </section>
+
+      <!-- Settings tab -->
+      <section class="tab-panel" id="tab-settings">
+        <div class="content-header">
+          <div class="content-eyebrow">
+            <span class="eyebrow-line"></span>
+            <span class="eyebrow-text">Configuration</span>
+            <span class="eyebrow-line"></span>
+          </div>
+          <h2 class="content-title">Settings</h2>
+          <div class="content-ornament">
+            <span class="orn-line"></span>
+            <span class="orn-gem">&#9670;</span>
+            <span class="orn-gem orn-gem-sm">&#9670;</span>
+            <span class="orn-gem">&#9670;</span>
+            <span class="orn-line"></span>
+          </div>
+        </div>
+        <div class="settings-grid">
+          <div class="setting-row">
+            <label class="setting-label" for="game-path">Game Directory</label>
+            <div class="setting-control">
+              <input type="text" id="game-path" class="setting-input" readonly placeholder="Select WoW directory...">
+              <button class="setting-btn" id="browse-btn">Browse</button>
+            </div>
+          </div>
+          <div class="setting-row">
+            <label class="setting-label">Realmlist</label>
+            <div class="setting-control">
+              <input type="text" class="setting-input" value="set realmlist projectrx.net" readonly>
+              <button class="setting-btn" id="patch-btn" disabled>Set</button>
+            </div>
+          </div>
+          <div class="setting-row">
+            <label class="setting-label">Status</label>
+            <span class="setting-value" id="realmlist-status">No game directory set</span>
+          </div>
+          <div class="setting-row">
+            <label class="setting-label">After Launch</label>
+            <div class="setting-control setting-control--stacked">
+              <label class="setting-checkbox">
+                <input type="checkbox" id="keep-open-cb">
+                <span class="setting-checkbox__text">Keep launcher open</span>
+              </label>
+              <label class="setting-checkbox">
+                <input type="checkbox" id="minimize-tray-cb">
+                <span class="setting-checkbox__text">Minimize to tray</span>
+              </label>
+            </div>
+          </div>
+        </div>
+        <div class="panel-footer">Project Rx &copy; 2026. All rights reserved.</div>
+      </section>
+
+    </main>
+  </div>
+
+  <!-- Patch warning modal -->
+  <div class="modal-overlay" id="patch-modal">
+    <div class="modal-box">
+      <div class="modal-title" id="modal-warn-title">Patch Not Installed</div>
+      <div class="modal-body" id="modal-warn-body">The Project Rx patch is not installed. You may experience issues without it.</div>
+      <div class="modal-body">Continue anyway?</div>
+      <div class="modal-actions">
+        <button class="modal-btn modal-btn-cancel" id="modal-cancel">Cancel</button>
+        <button class="modal-btn modal-btn-confirm" id="modal-confirm">Play Anyway</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Uninstall confirmation modal -->
+  <div class="modal-overlay" id="uninstall-modal">
+    <div class="modal-box">
+      <div class="modal-title">Uninstall Project Rx</div>
+      <div class="modal-body">This will remove all Project Rx patches, addons, and restore your original Wow.exe. Your other game files will not be affected.</div>
+      <div class="modal-body">Continue?</div>
+      <div class="modal-actions">
+        <button class="modal-btn modal-btn-cancel" id="uninstall-cancel">Cancel</button>
+        <button class="modal-btn modal-btn-confirm" id="uninstall-confirm">Uninstall</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- External link confirmation modal -->
+  <div class="modal-overlay" id="link-modal">
+    <div class="modal-box">
+      <div class="modal-title">Open External Link</div>
+      <div class="modal-body">This will open the following URL in your default browser:</div>
+      <div class="modal-body modal-url" id="link-modal-url"></div>
+      <div class="modal-actions">
+        <button class="modal-btn modal-btn-cancel" id="link-cancel">Cancel</button>
+        <button class="modal-btn modal-btn-confirm" id="link-open">Open</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Repair confirmation modal -->
+  <div class="modal-overlay" id="repair-modal">
+    <div class="modal-box">
+      <div class="modal-title">Repair Patch</div>
+      <div class="modal-body">This will verify all patch files and re-download any that are missing or corrupted. Use this if you are experiencing issues with game data.</div>
+      <div class="modal-body">Continue?</div>
+      <div class="modal-actions">
+        <button class="modal-btn modal-btn-cancel" id="repair-cancel">Cancel</button>
+        <button class="modal-btn modal-btn-confirm" id="repair-confirm">Repair</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Changelog modal -->
+  <div class="modal-overlay" id="changelog-modal">
+    <div class="modal-box modal-box--wide">
+      <div class="modal-title" id="changelog-title">Changelog</div>
+      <div class="changelog-content" id="changelog-content">
+        <div class="news-placeholder">Loading...</div>
+      </div>
+      <div class="modal-actions">
+        <button class="modal-btn modal-btn-cancel" id="changelog-close">Close</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Update available modal -->
+  <div class="modal-overlay" id="update-modal">
+    <div class="modal-box">
+      <div class="modal-title">Update Available</div>
+      <div class="modal-body" id="update-modal-body">A new patch version is available. Would you like to download it?</div>
+      <div class="modal-actions">
+        <button class="modal-btn modal-btn-cancel" id="update-skip">Skip</button>
+        <button class="modal-btn modal-btn-confirm" id="update-download">Download</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Launcher self-update modal -->
+  <div class="modal-overlay" id="launcher-update-modal">
+    <div class="modal-box">
+      <div class="modal-title">Launcher Update</div>
+      <div class="modal-body">A new launcher version (<strong id="launcher-update-version"></strong>) is available.</div>
+      <div class="modal-body" id="launcher-update-notes"></div>
+      <div class="modal-body hidden" id="launcher-update-dl">
+        <div id="launcher-update-status">Downloading update...</div>
+        <div class="patch-progress-track">
+          <div class="patch-progress-fill" id="launcher-update-fill"></div>
+        </div>
+      </div>
+      <div class="modal-actions" id="launcher-update-actions">
+        <button class="modal-btn modal-btn-cancel" id="launcher-update-later">Later</button>
+        <button class="modal-btn modal-btn-confirm" id="launcher-update-now">Update Now</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Toast container -->
+  <div class="toast-container" id="toast-container"></div>
+
+</body>
+</html>
