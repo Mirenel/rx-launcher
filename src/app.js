@@ -799,9 +799,9 @@ window.addEventListener("DOMContentLoaded", function () {
       if (path) {
         settings.wine_prefix = path;
         updateWinePrefixDisplay();
-        saveSettingsWithFeedback('Wine prefix saved').then(function () {
+        saveSettingsWithFeedback('Wine prefix saved').catch(function () {}).then(function () {
           return checkGameRuntime();
-        }).catch(function () {});
+        });
       }
     }).catch(function () { showToast('Could not open folder picker'); });
   });
@@ -809,9 +809,9 @@ window.addEventListener("DOMContentLoaded", function () {
   winePrefixClear.addEventListener('click', function () {
     settings.wine_prefix = null;
     updateWinePrefixDisplay();
-    saveSettingsWithFeedback('Using the default Wine prefix').then(function () {
+    saveSettingsWithFeedback('Using the default Wine prefix').catch(function () {}).then(function () {
       return checkGameRuntime();
-    }).catch(function () {});
+    });
   });
 
   // ── Setup / path warning banners ───────────────────────
@@ -986,12 +986,15 @@ window.addEventListener("DOMContentLoaded", function () {
         showToast('Game launched');
       }
     }).catch(function (e) {
+      var message = String(e);
       modalWarnTitle.textContent = 'Launch Failed';
-      modalWarnBody.textContent = String(e).indexOf('rx-wow.exe not found') !== -1
+      modalWarnBody.textContent = message.indexOf('rx-wow.exe not found') !== -1
         ? 'rx-wow.exe is not installed in the selected game directory. Use Patch or Repair to install it first.'
-        : String(e).indexOf('32-bit Wine') !== -1
+        : message.indexOf('Wine prefix') !== -1
+        ? message
+        : message.indexOf('32-bit Wine') !== -1
         ? 'Wine is installed but 32-bit support is unavailable. Install Wine support for 32-bit Windows applications and try again.'
-        : String(e).indexOf('Wine') !== -1
+        : message.indexOf('Wine') !== -1
         ? 'Wine is required to launch the Windows game client on Linux. Install Wine and try again.'
         : 'Could not start rx-wow.exe. Make sure the game directory is accessible and try again.';
       modalWarnQuestion.classList.add('hidden');
