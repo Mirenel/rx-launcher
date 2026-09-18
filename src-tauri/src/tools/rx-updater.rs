@@ -1,7 +1,8 @@
-// Build tooling is kept outside src/bin so Tauri does not bundle it.
+// Keep release-only binaries outside src/bin; Tauri auto-discovers binaries
+// there for application bundles.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
-// This helper is only executed by Windows launcher builds. Keep the source
-// available to Cargo on Linux for workspace checks without dead-code noise.
+// This helper runs only in Windows release builds, but remains compilable on
+// Linux so workspace checks cover the source without dead-code warnings.
 #![cfg_attr(not(windows), allow(dead_code))]
 
 #[path = "../update_auth.rs"]

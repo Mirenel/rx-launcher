@@ -35,7 +35,6 @@ body {
   user-select: none;
 }
 
-/* ── Window controls (floating) ──────────────────────────── */
 .drag-zone {
   position: fixed;
   top: 0;
@@ -91,7 +90,6 @@ body {
   color: #fff;
 }
 
-/* ── Launcher layout ─────────────────────────────────────── */
 .launcher {
   position: relative;
   z-index: 1;
@@ -99,7 +97,6 @@ body {
   height: 100vh;
 }
 
-/* ── Sidebar ─────────────────────────────────────────────── */
 .sidebar {
   width: var(--sidebar-w);
   display: flex;
@@ -123,7 +120,6 @@ body {
   filter: drop-shadow(0 4px 8px rgba(0,0,0,.5));
 }
 
-/* ── Server status ───────────────────────────────────────── */
 .server-status {
   display: flex;
   align-items: center;
@@ -178,7 +174,6 @@ body {
   color: var(--text-dim);
 }
 
-/* ── Sidebar nav ─────────────────────────────────────────── */
 .sidebar-nav {
   display: flex;
   flex-direction: column;
@@ -227,7 +222,6 @@ body {
   box-shadow: 0 0 6px rgba(224, 80, 80, .6);
 }
 
-/* ── Play button ─────────────────────────────────────────── */
 .sidebar-bottom {
   padding: 16px;
   padding-bottom: 20px;
@@ -356,7 +350,6 @@ body {
   color: #e0e3ff;
 }
 
-/* ── Content area ────────────────────────────────────────── */
 .content {
   flex: 1;
   display: flex;
@@ -378,7 +371,6 @@ body {
 .content::-webkit-scrollbar-thumb { background: var(--gold-dim); border-radius: 3px; }
 .content::-webkit-scrollbar-thumb:hover { background: var(--gold-dark); }
 
-/* ── Content header ──────────────────────────────────────── */
 .content-header {
   margin-bottom: 24px;
   text-align: center;
@@ -397,11 +389,9 @@ body {
   filter: drop-shadow(0 0 20px rgba(200,162,50,.3));
 }
 
-/* ── Tab panels ──────────────────────────────────────────── */
 .tab-panel { display: none; flex-direction: column; flex: 1; min-height: 0; }
 .tab-panel.active { display: flex; }
 
-/* ── News ────────────────────────────────────────────────── */
 .news-list {
   display: flex;
   flex-direction: column;
@@ -449,7 +439,6 @@ body {
   text-align: center;
 }
 
-/* ── News entries ── */
 .news-entry {
   position: relative;
   border: 1px solid var(--divider);
@@ -584,7 +573,6 @@ body {
   transform: scale(.95);
 }
 
-/* ── Settings ────────────────────────────────────────────── */
 .settings-grid {
   display: flex;
   flex-direction: column;
@@ -809,7 +797,6 @@ body {
   color: var(--text);
 }
 
-/* ── Patch tab ───────────────────────────────────────────── */
 .patch-cards {
   display: flex;
   gap: 16px;
@@ -863,7 +850,6 @@ body {
   padding-top: 24px;
 }
 
-/* ── Patch download ──────────────────────────────────────── */
 .patch-download-area {
   margin-top: 24px;
   display: flex;
@@ -1081,7 +1067,6 @@ body {
 .patch-log::-webkit-scrollbar-track { background: transparent; }
 .patch-log::-webkit-scrollbar-thumb { background: var(--gold-dim); border-radius: 2px; }
 
-/* ── Modal ───────────────────────────────────────────────── */
 .modal-overlay {
   display: none;
   position: fixed;
@@ -1234,7 +1219,6 @@ body {
   box-shadow: inset 0 1px 0 rgba(255,255,255,.12), 0 0 12px rgba(200,162,50,.2);
 }
 
-/* ── Toast ───────────────────────────────────────────────── */
 .toast-container {
   position: fixed;
   bottom: 24px;
@@ -1265,15 +1249,12 @@ body {
   transform: translateY(0);
 }
 
-/* ── Responsive ──────────────────────────────────────────── */
 
-/* Medium: compact content padding, 2-col small cards */
 @media (max-width: 900px) {
   .content { padding: 24px 20px 20px; }
   .content-title { font-size: 19px; }
 }
 
-/* Small: sidebar shrinks, single-col cards */
 @media (max-width: 760px) {
   :root { --sidebar-w: 190px; }
   .sidebar-logo { padding: 24px 0 6px; }
@@ -1303,7 +1284,6 @@ body {
   border-color: rgba(200, 162, 50, 0.5);
 }
 
-/* ── Setup banner (no game path) ────────────────────────── */
 .setup-banner {
   display: flex;
   align-items: center;
@@ -1320,7 +1300,6 @@ body {
   color: #c8a232;
 }
 
-/* ── Path warning banner (invalid game path) ────────────── */
 .path-warn-banner {
   position: relative;
   display: flex;
@@ -1338,7 +1317,6 @@ body {
   color: var(--red);
 }
 
-/* ── Game runtime warning banner ────────────────────────── */
 .runtime-warn-banner {
   display: flex;
   align-items: center;
@@ -1355,7 +1333,6 @@ body {
   color: var(--red);
 }
 
-/* ── Launcher update banner ────────────────────────────── */
 .launcher-update-banner {
   display: flex;
   align-items: center;
@@ -1393,7 +1370,6 @@ body {
   opacity: 0.6;
 }
 
-/* ── Reduced motion ──────────────────────────────────────── */
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after {
     animation-duration: 0s !important;
@@ -1401,7 +1377,6 @@ body {
   }
 }
 
-/* ── Project Rx panel system ─────────────────────────────── */
 :root {
   --gold: #c89b3c;
   --gold-light: #e2c578;

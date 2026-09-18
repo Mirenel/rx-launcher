@@ -18,9 +18,8 @@ fn main() {
         println!("cargo:rerun-if-changed={}", helper_source.display());
     }
 
-    // The self-replacing helper is a Windows-only release component. Linux
-    // builds still generate the included files so ordinary source checkouts
-    // do not need a private, generated PE binary just to compile.
+    // The self-replacing helper is Windows-only. Non-Windows builds use an
+    // empty placeholder so source checks do not require a generated PE binary.
     let helper_bytes = if target_os == "windows" {
         fs::read(&helper_source).unwrap_or_default()
     } else {

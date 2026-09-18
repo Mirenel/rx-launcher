@@ -1,6 +1,5 @@
-// The signed self-updater is currently Windows-only. Keep its implementation
-// compiled for Windows while allowing Linux builds to expose only the public
-// no-updater behavior until a Linux updater is published.
+// The signed self-updater is Windows-only; Linux keeps the public no-updater
+// behavior until a signed Linux artifact and updater are available.
 #![cfg_attr(not(windows), allow(dead_code, unused_imports, unused_variables))]
 
 use futures_util::StreamExt;

@@ -38,8 +38,6 @@ const LEGACY_PATCH_PATHS: &[&str] = &[
 
 struct HttpClient(reqwest::Client);
 
-// ── Input validation ────────────────────────────────────────
-
 /// Validates game_path from the frontend: must be absolute, no traversal,
 /// must exist as a directory. Returns the validated PathBuf or a generic error.
 fn validate_game_path(raw: &str) -> Result<PathBuf, String> {
@@ -61,8 +59,6 @@ fn validate_game_path(raw: &str) -> Result<PathBuf, String> {
 
     Ok(path)
 }
-
-// ── Launcher config (constants exposed to frontend) ─────────
 
 #[derive(Serialize)]
 struct LauncherConfig {
@@ -135,8 +131,6 @@ fn check_game_directory(game_path: String) -> Result<GameDirectoryStatus, String
         has_rx_wow: dir.join("rx-wow.exe").is_file(),
     })
 }
-
-// ── Server status ────────────────────────────────────────────
 
 #[derive(Debug, PartialEq, Serialize)]
 struct ServerStatus {
@@ -225,8 +219,6 @@ async fn check_server_status(http: tauri::State<'_, HttpClient>) -> Result<Serve
         players: None,
     })
 }
-
-// ── JSON fetch helper (size-capped) ─────────────────────────
 
 async fn fetch_json_vec<T: serde::de::DeserializeOwned>(
     client: &reqwest::Client,
@@ -347,8 +339,6 @@ async fn fetch_content_manifest(
     })
 }
 
-// ── News (fetched from projectrx.net) ───────────────────────
-
 #[derive(Serialize, Deserialize, Clone)]
 struct NewsItem {
     date: String,
@@ -366,8 +356,6 @@ async fn get_news(http: tauri::State<'_, HttpClient>) -> Result<Vec<NewsItem>, S
     fetch_json_vec(&http.0, "https://projectrx.net/news.json", 1_048_576).await
 }
 
-// ── Changelog (fetched from projectrx.net) ──────────────────
-
 #[derive(Serialize, Deserialize, Clone)]
 struct ChangelogEntry {
     version: String,
@@ -380,8 +368,6 @@ async fn get_changelog(http: tauri::State<'_, HttpClient>) -> Result<Vec<Changel
     fetch_json_vec(&http.0, "https://projectrx.net/changelog.json", 524_288).await
 }
 
-// ── Game launch (via shell plugin) ──────────────────────────
-
 #[tauri::command]
 fn launch_game(game_path: String, wine_prefix: Option<String>) -> Result<(), String> {
     let dir = validate_game_path(&game_path)?;
@@ -393,8 +379,6 @@ fn launch_game(game_path: String, wine_prefix: Option<String>) -> Result<(), Str
 
     runtime::launch(&wow_exe, &dir, wine_prefix.as_deref())
 }
-
-// ── Patch download ──────────────────────────────────────────
 
 #[derive(Clone, Serialize)]
 struct DownloadProgress {
@@ -832,7 +816,6 @@ async fn download_patch(
         let part_path =
             final_path.with_file_name(format!(".{part_name}.rx-part-{}", std::process::id()));
 
-        // Check if we can skip this file
         let skip = if *extract {
             let installed = read_installed_addons(&app, &dir)?;
             !repair
@@ -1050,8 +1033,6 @@ fn extract_zip_file(zip_path: &Path, dest_dir: &Path) -> Result<Vec<String>, Str
     Ok(roots.into_iter().collect())
 }
 
-// ── Dynamic addon tracking ─────────────────────────────────
-
 #[derive(Clone, Debug, Deserialize, Serialize)]
 struct InstalledAddon {
     name: String,
@@ -1120,7 +1101,10 @@ fn read_installed_addons(
     };
     let manifest: InstalledAddonsManifest = match serde_json::from_str(&text) {
         Ok(manifest) => manifest,
-        Err(_) => return Ok(None), // Legacy or malformed data is non-authoritative.
+        Err(_) => {
+            // Legacy or malformed tracking is non-authoritative; do not touch files based on it.
+            return Ok(None);
+        }
     };
     if !manifest_matches_game(&manifest, &canonical_game_path(game_dir)?) {
         return Ok(None);
@@ -1242,7 +1226,7 @@ fn install_staged_addons(
     let mut replaced_existing: Vec<String> = Vec::new();
 
     let result = (|| {
-        // Move every launcher-owned directory aside so all later changes can roll back.
+        // Stage launcher-owned directories before mutation so later changes can roll back.
         for addon in &old.addons {
             let current = addons_dir.join(&addon.name);
             if current.exists() {
@@ -1252,7 +1236,8 @@ fn install_staged_addons(
             }
         }
 
-        // Restore user content for addons no longer shipped by the new patch.
+        // Restore backups for addons no longer shipped; user content must survive
+        // patch removal.
         for addon in old
             .addons
             .iter()
@@ -1543,7 +1528,6 @@ fn uninstall_patch(app: tauri::AppHandle, game_path: String) -> Result<String, S
         }
     }
 
-    // Remove installed addon folders; restore backups if they exist
     let addons_dir = dir.join("Interface").join("AddOns");
     if let Some(mut manifest) = manifest {
         let mut remaining = Vec::new();
@@ -1578,8 +1562,6 @@ fn uninstall_patch(app: tauri::AppHandle, game_path: String) -> Result<String, S
         ))
     }
 }
-
-// ── Patch integrity check ────────────────────────────────────
 
 #[tauri::command]
 async fn verify_patch(
@@ -1640,8 +1622,6 @@ async fn verify_patch(
     .await
     .unwrap_or_else(|_| Err("Verification failed".into()))
 }
-
-// ── Realmlist (needs arbitrary path access — stays in Rust) ─
 
 #[tauri::command]
 fn check_realmlist(game_path: String) -> Result<String, String> {
@@ -1706,8 +1686,6 @@ fn patch_realmlist(game_path: String) -> Result<String, String> {
     }
 }
 
-// ── Open URL (allowlisted domains only) ─────────────────────
-
 const ALLOWED_DOMAINS: &[&str] = &[
     "projectrx.net",
     "www.projectrx.net",
@@ -1740,8 +1718,6 @@ fn open_url(url: String) -> Result<(), String> {
 
     Ok(())
 }
-
-// ── App entry ───────────────────────────────────────────────
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -1781,7 +1757,6 @@ pub fn run() {
             window_vibrancy::apply_acrylic(&window, Some((9, 7, 5, 220)))
                 .expect("Failed to apply acrylic");
 
-            // System tray
             let show_i = MenuItem::with_id(app, "show", "Show", true, None::<&str>)?;
             let quit_i = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
             let menu = Menu::with_items(app, &[&show_i, &quit_i])?;

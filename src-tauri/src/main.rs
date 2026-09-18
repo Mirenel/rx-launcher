@@ -1,4 +1,5 @@
-// Prevents additional console window on Windows in release, DO NOT REMOVE!!
+// Release Windows builds use the GUI subsystem so launching the application
+// does not open a console window.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use std::fmt::Display;

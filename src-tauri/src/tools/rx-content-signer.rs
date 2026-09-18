@@ -1,4 +1,5 @@
-// Build tooling is kept outside src/bin so Tauri does not bundle it.
+// Keep release-only binaries outside src/bin; Tauri auto-discovers binaries
+// there for application bundles.
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use ed25519_dalek::{Signer, SigningKey};
 use rand_core::OsRng;

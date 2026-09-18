@@ -13,7 +13,6 @@ window.addEventListener("DOMContentLoaded", function () {
     ]);
   }
 
-  // ── Toast notifications ─────────────────────────────────
   var toastContainer = document.getElementById('toast-container');
   function showToast(message) {
     var toast = document.createElement('div');
@@ -27,14 +26,12 @@ window.addEventListener("DOMContentLoaded", function () {
     }, 2500);
   }
 
-  // ── Plugin APIs ─────────────────────────────────────────
   var tauriFs = window.__TAURI__.fs;
   var tauriDialog = window.__TAURI__.dialog;
   var tauriProcess = window.__TAURI__.process;
   var tauriEvent = window.__TAURI__.event;
   var BaseDir = tauriFs.BaseDirectory;
 
-  // ── Settings (persisted via fs plugin to AppConfig) ─────
   var SETTINGS_FILE = 'settings.json';
   var settings = { game_path: null, wine_prefix: null, installed_patch_version: null, keep_open: false, minimize_to_tray: false, last_news_date: null };
   var config = null;
@@ -46,7 +43,7 @@ window.addEventListener("DOMContentLoaded", function () {
         try {
           var parsed = JSON.parse(text);
           if (parsed && typeof parsed === 'object') {
-            // Only accept known keys with expected types
+            // Ignore unknown or incorrectly typed persisted values.
             if (typeof parsed.game_path === 'string') settings.game_path = parsed.game_path;
             if (typeof parsed.wine_prefix === 'string' && parsed.wine_prefix.length > 0) settings.wine_prefix = parsed.wine_prefix;
             if (typeof parsed.installed_patch_version === 'string') settings.installed_patch_version = parsed.installed_patch_version;
@@ -54,9 +51,13 @@ window.addEventListener("DOMContentLoaded", function () {
             if (typeof parsed.minimize_to_tray === 'boolean') settings.minimize_to_tray = parsed.minimize_to_tray;
             if (typeof parsed.last_news_date === 'string') settings.last_news_date = parsed.last_news_date;
           }
-        } catch (e) { /* corrupt file, use defaults */ }
+        } catch (e) {
+          // Malformed settings must not prevent the launcher from starting.
+        }
       })
-      .catch(function () { /* file doesn't exist yet */ });
+      .catch(function () {
+        // A missing settings file is expected on the first launch.
+      });
   }
 
   function saveSettings() {
@@ -64,7 +65,7 @@ window.addEventListener("DOMContentLoaded", function () {
     var write = function () {
       return tauriFs.writeTextFile(SETTINGS_FILE, data, { baseDir: BaseDir.AppConfig })
         .catch(function () {
-          // AppConfig directory may not exist on first run — create and retry
+          // The filesystem scope may not exist on first launch; create it and retry.
           return tauriFs.mkdir('.', { baseDir: BaseDir.AppConfig, recursive: true })
             .then(function () {
               return tauriFs.writeTextFile(SETTINGS_FILE, data, { baseDir: BaseDir.AppConfig });
@@ -86,10 +87,8 @@ window.addEventListener("DOMContentLoaded", function () {
     });
   }
 
-  // ── Disable right-click context menu ────────────────────
   document.addEventListener('contextmenu', function (e) { e.preventDefault(); });
 
-  // ── Titlebar controls ───────────────────────────────────
   document.getElementById('btn-minimize').addEventListener('click', function () {
     appWindow.minimize();
   });
@@ -104,7 +103,6 @@ window.addEventListener("DOMContentLoaded", function () {
     }
   });
 
-  // ── Tab switching ───────────────────────────────────────
   var newsNavBtn = document.querySelector('.nav-item[data-tab="news"]');
   var allNavItems = document.querySelectorAll('.nav-item');
   var allTabPanels = document.querySelectorAll('.tab-panel');
@@ -115,8 +113,8 @@ window.addEventListener("DOMContentLoaded", function () {
       var selected = b.dataset.tab === name;
       b.classList.toggle('active', selected);
       b.setAttribute('aria-selected', selected ? 'true' : 'false');
-      // Keep every navigation tab reachable with Tab; arrow keys still move
-      // between tabs for users who prefer roving keyboard navigation.
+      // Keep every navigation tab in the Tab order; arrow keys provide an
+      // alternate way to move between tabs.
       b.tabIndex = 0;
     });
     allTabPanels.forEach(function (p) {
@@ -150,7 +148,6 @@ window.addEventListener("DOMContentLoaded", function () {
     });
   });
 
-  // ── Element references ──────────────────────────────────
   var statusDot = document.getElementById('status-dot');
   var statusLabel = document.getElementById('status-label');
   var statusPlayers = document.getElementById('status-players');
@@ -234,7 +231,7 @@ window.addEventListener("DOMContentLoaded", function () {
   var runtimeWarnRetry = document.getElementById('runtime-warn-retry');
 
   var pendingLinkUrl = null;
-  // Keep the community action usable without a remote launcher manifest.
+  // Keep the community action available even when remote launcher metadata is unavailable.
   var discordInviteUrl = 'https://discord.gg/VTWnWbqJYE';
   var pendingLaunchAction = null;
   var hasGamePath = false;
@@ -247,7 +244,6 @@ window.addEventListener("DOMContentLoaded", function () {
 
   discordBtn.classList.remove('hidden');
 
-  // ── Server status ───────────────────────────────────────
   var statusChecking = false;
   function checkStatus() {
     if (statusChecking) return;
@@ -275,7 +271,6 @@ window.addEventListener("DOMContentLoaded", function () {
     });
   }
 
-  // ── News ────────────────────────────────────────────────
   function loadNews() {
     invoke('get_news', {}, 10000).then(function (items) {
       if (!items || items.length === 0) {
@@ -334,7 +329,7 @@ window.addEventListener("DOMContentLoaded", function () {
         newsList.appendChild(entry);
       });
 
-      // Apply background images from data attributes (CSP-safe, origin-validated)
+      // Restrict remote backgrounds to the Project Rx HTTPS origin allowed by the CSP.
       newsList.querySelectorAll('[data-bg]').forEach(function (el) {
         var src = el.getAttribute('data-bg').replace(/[\\'"();\s]/g, '');
         if (src && src.indexOf('https://projectrx.net/') === 0) {
@@ -342,7 +337,6 @@ window.addEventListener("DOMContentLoaded", function () {
         }
       });
 
-      // Check for unread news
       latestNewsDate = items[0].date;
       if (settings.last_news_date !== latestNewsDate) {
         var newsActive = newsNavBtn.classList.contains('active');
@@ -354,7 +348,6 @@ window.addEventListener("DOMContentLoaded", function () {
         }
       }
 
-      // Wire up arrow link buttons
       newsList.querySelectorAll('.news-entry__arrow[data-url]').forEach(function (btn) {
         btn.addEventListener('click', function () {
           pendingLinkUrl = btn.getAttribute('data-url');
@@ -384,7 +377,6 @@ window.addEventListener("DOMContentLoaded", function () {
     }
   }
 
-  // ── Patch display ───────────────────────────────────────
   function updatePatchInstallPath() {
     if (settings.game_path) {
       patchInstallPath.textContent = 'Patch will be installed in ' + settings.game_path;
@@ -591,7 +583,6 @@ window.addEventListener("DOMContentLoaded", function () {
     updatePatchInstallPath();
   }
 
-  // ── Patch download ──────────────────────────────────────
   function patchLogLine(text, cls) {
     var line = document.createElement('div');
     line.className = 'log-line' + (cls ? ' ' + cls : '');
@@ -605,7 +596,6 @@ window.addEventListener("DOMContentLoaded", function () {
     patchProgressText.textContent = pct + '%';
   }
 
-  // ── Download speed / ETA ────────────────────────────────
   var speedHistory = [];
 
   function getSpeedText(dl, total) {
@@ -717,7 +707,7 @@ window.addEventListener("DOMContentLoaded", function () {
       updatePlayButtonState();
       updatePatchDisplay();
       checkGameDirectory();
-      // Auto-set realmlist only if not found (don't overwrite user's custom realmlist)
+      // Do not overwrite a user's custom realmlist; only fill in a missing value.
       invoke('check_realmlist', { gamePath: settings.game_path }).catch(function (e) {
         if (String(e).indexOf('not found') !== -1) {
           return invoke('patch_realmlist', { gamePath: settings.game_path }).then(function () {
@@ -768,7 +758,6 @@ window.addEventListener("DOMContentLoaded", function () {
     startPatchDownload(true);
   });
 
-  // ── Game directory (dialog plugin) ──────────────────────
   document.getElementById('browse-btn').addEventListener('click', function () {
     tauriDialog.open({
       multiple: false,
@@ -814,7 +803,6 @@ window.addEventListener("DOMContentLoaded", function () {
     });
   });
 
-  // ── Setup / path warning banners ───────────────────────
   document.getElementById('setup-banner-btn').addEventListener('click', function () {
     document.getElementById('browse-btn').click();
   });
@@ -823,7 +811,6 @@ window.addEventListener("DOMContentLoaded", function () {
     document.getElementById('browse-btn').click();
   });
 
-  // ── Realmlist ───────────────────────────────────────────
   function checkRealmlist() {
     if (!settings.game_path) return;
     invoke('check_realmlist', { gamePath: settings.game_path }).then(function (result) {
@@ -850,7 +837,6 @@ window.addEventListener("DOMContentLoaded", function () {
     });
   });
 
-  // ── After-launch checkboxes ─────────────────────────────
   keepOpenCb.addEventListener('change', function () {
     settings.keep_open = keepOpenCb.checked;
     minimizeTrayCb.disabled = !keepOpenCb.checked;
@@ -866,7 +852,6 @@ window.addEventListener("DOMContentLoaded", function () {
     saveSettingsWithFeedback('Settings saved').catch(function () {});
   });
 
-  // ── Changelog modal ─────────────────────────────────────
   var changelogLoaded = false;
 
   changelogBtn.addEventListener('click', function () {
@@ -899,7 +884,6 @@ window.addEventListener("DOMContentLoaded", function () {
     if (e.target === changelogModal) hideModal(changelogModal);
   });
 
-  // ── Warning modals ──────────────────────────────────────
   var modalReturnFocus = new WeakMap();
   function showModal(overlay) {
     modalReturnFocus.set(overlay, document.activeElement);
@@ -1112,7 +1096,6 @@ window.addEventListener("DOMContentLoaded", function () {
     });
   });
 
-  // ── External link modal ────────────────────────────────
   linkCancel.addEventListener('click', function () { hideModal(linkModal); });
   linkModal.addEventListener('click', function (e) {
     if (e.target === linkModal) hideModal(linkModal);
@@ -1127,7 +1110,6 @@ window.addEventListener("DOMContentLoaded", function () {
     }
   });
 
-  // ── Discord community modal ────────────────────────────
   discordBtn.addEventListener('click', function () {
     if (!discordInviteUrl) return;
     discordInviteUrlEl.textContent = discordInviteUrl;
@@ -1170,7 +1152,6 @@ window.addEventListener("DOMContentLoaded", function () {
     return copied ? Promise.resolve() : Promise.reject('Clipboard unavailable');
   }
 
-  // ── Uninstall ──────────────────────────────────────────
   uninstallCancel.addEventListener('click', function () { hideModal(uninstallModal); });
   uninstallModal.addEventListener('click', function (e) {
     if (e.target === uninstallModal) hideModal(uninstallModal);
@@ -1206,7 +1187,6 @@ window.addEventListener("DOMContentLoaded", function () {
     });
   });
 
-  // ── Play button ─────────────────────────────────────────
   function continuePlayFlow() {
     if (!runtimeReady) {
       runtimeWarnBanner.classList.remove('hidden');
@@ -1264,7 +1244,6 @@ window.addEventListener("DOMContentLoaded", function () {
     continuePlayFlow();
   });
 
-  // ── Initialization ──────────────────────────────────────
   Promise.all([
     invoke('get_launcher_config', null, 10000),
     loadSettings()
@@ -1340,7 +1319,6 @@ window.addEventListener("DOMContentLoaded", function () {
       }).catch(function () {});
     }, 500);
 
-    // Show launcher data path in settings
     var tauriPath = window.__TAURI__.path;
     if (tauriPath && tauriPath.appConfigDir) {
       tauriPath.appConfigDir().then(function (dir) {
@@ -1354,7 +1332,6 @@ window.addEventListener("DOMContentLoaded", function () {
   });
 
 
-  // ── Utility ─────────────────────────────────────────────
   function esc(str) {
     if (!str) return '';
     return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
