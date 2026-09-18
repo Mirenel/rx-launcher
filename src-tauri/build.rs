@@ -6,6 +6,13 @@ use std::path::PathBuf;
 fn main() {
     println!("cargo:rerun-if-env-changed=RX_UPDATE_PUBLIC_KEY_B64");
     println!("cargo:rerun-if-env-changed=RX_CONTENT_PUBLIC_KEY_B64");
+    if env::var("PROFILE").as_deref() == Ok("release")
+        && env::var("RX_CONTENT_PUBLIC_KEY_B64")
+            .map(|value| value.trim().is_empty())
+            .unwrap_or(true)
+    {
+        panic!("RX_CONTENT_PUBLIC_KEY_B64 is required for release builds");
+    }
     let out_dir = PathBuf::from(env::var_os("OUT_DIR").expect("OUT_DIR is set by Cargo"));
     let helper_output = out_dir.join("rx-updater.exe");
     let helper_hash_output = out_dir.join("embedded_updater.rs");
