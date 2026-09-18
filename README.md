@@ -8,7 +8,3 @@ needed to build it.
   capabilities, and public verification keys.
 - `package.json` declares the Tauri CLI build entry point.
 - `package-lock.json` pins the npm dependency graph.
-
-Private keys, release artifacts, game files, signing tools, CI configuration,
-development containers, operational scripts, and internal documentation are
-not part of this repository.
