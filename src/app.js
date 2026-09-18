@@ -458,6 +458,8 @@ window.addEventListener("DOMContentLoaded", function () {
   function checkGameRuntime() {
     if (runtimeChecking) {
       runtimeRecheckPending = true;
+      runtimeReady = false;
+      updatePlayButtonState();
       return Promise.resolve(runtimeReady);
     }
     runtimeChecking = true;
@@ -491,6 +493,8 @@ window.addEventListener("DOMContentLoaded", function () {
       runtimeWarnRetry.disabled = false;
       if (runtimeRecheckPending) {
         runtimeRecheckPending = false;
+        runtimeReady = false;
+        updatePlayButtonState();
         checkGameRuntime();
       }
       return ready;

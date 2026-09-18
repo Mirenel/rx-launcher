@@ -227,4 +227,11 @@ mod tests {
         assert!(!status.ready);
         assert!(status.message.contains("Wine prefix directory not found"));
     }
+
+    #[test]
+    fn relative_wine_prefix_blocks_runtime() {
+        let status = linux_status(Some("project-rx-wine-prefix"));
+        assert!(!status.ready);
+        assert!(status.message.contains("absolute directory"));
+    }
 }
