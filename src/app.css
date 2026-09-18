@@ -1,4 +1,5 @@
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+.hidden { display: none !important; }
 
 :root {
   --gold:         #c8a232;
@@ -34,28 +35,6 @@ body {
   user-select: none;
 }
 
-/* ── Edge fade (vignette) ────────────────────────────────── */
-body::before,
-body::after {
-  content: '';
-  position: fixed;
-  left: 0;
-  right: 0;
-  height: 60px;
-  z-index: 50;
-  pointer-events: none;
-}
-
-body::before {
-  top: 0;
-  background: linear-gradient(180deg, rgba(5,4,2,.35) 0%, transparent 100%);
-}
-
-body::after {
-  bottom: 0;
-  background: linear-gradient(0deg, rgba(5,4,2,.35) 0%, transparent 100%);
-}
-
 /* ── Window controls (floating) ──────────────────────────── */
 .drag-zone {
   position: fixed;
@@ -64,6 +43,20 @@ body::after {
   right: 72px;
   height: 44px;
   z-index: 60;
+}
+
+.launcher-version {
+  position: absolute;
+  top: 4px;
+  left: 34px;
+  width: 154px;
+  text-align: center;
+  color: #8e7d5a;
+  font-family: 'Encode Sans', system-ui, sans-serif;
+  font-size: 10px;
+  letter-spacing: .08em;
+  line-height: 24px;
+  pointer-events: none;
 }
 
 .window-controls {
@@ -122,69 +115,12 @@ body::after {
   position: relative;
 }
 
-.logo-glow {
-  position: absolute;
-  width: 120px;
-  height: 120px;
-  top: 50%;
-  left: 50%;
-  transform: translate(-50%, -50%);
-  border-radius: 50%;
-  background: radial-gradient(circle, rgba(200,162,50,.12), transparent 65%);
-  filter: blur(16px);
-  animation: logoPulse 6s ease-in-out infinite;
-  pointer-events: none;
-}
-
-@keyframes logoPulse {
-  0%, 100% { opacity: .4; transform: translate(-50%, -50%) scale(1); }
-  50%      { opacity: .8; transform: translate(-50%, -50%) scale(1.08); }
-}
-
 .logo-img {
   position: relative;
   width: 110px;
   height: 110px;
   object-fit: contain;
-  filter:
-    drop-shadow(0 4px 8px rgba(0,0,0,.5))
-    drop-shadow(0 0 0 rgba(200,162,50,0));
-  transition: filter .45s, transform .45s;
-  animation: iconBreath 8s ease-in-out infinite;
-}
-
-@keyframes iconBreath {
-  0%, 45%, 100% {
-    filter: drop-shadow(0 4px 8px rgba(0,0,0,.5)) drop-shadow(0 0 0 rgba(200,162,50,0));
-    transform: scale(1);
-  }
-  55% {
-    filter: drop-shadow(0 4px 8px rgba(0,0,0,.5)) drop-shadow(0 0 16px rgba(200,162,50,.45));
-    transform: scale(1.02);
-  }
-}
-
-/* ── Sidebar rune rule ───────────────────────────────────── */
-.sidebar-rule {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 0 20px;
-  margin: 8px 0 4px;
-}
-
-.rule-line {
-  flex: 1;
-  height: 1px;
-  background: linear-gradient(90deg, transparent, var(--gold-dark) 50%, transparent);
-}
-
-.rule-rune {
-  font-size: 12px;
-  color: var(--gold-dark);
-  letter-spacing: .22em;
-  text-shadow: 0 0 10px rgba(200,162,50,.6);
-  user-select: none;
+  filter: drop-shadow(0 4px 8px rgba(0,0,0,.5));
 }
 
 /* ── Server status ───────────────────────────────────────── */
@@ -269,39 +205,13 @@ body::after {
   position: relative;
 }
 
-.nav-gem {
-  font-size: 12px;
-  color: var(--gold-dim);
-  transition: color .15s, text-shadow .15s;
-}
-
 .nav-item:hover {
   color: var(--gold-light);
   background: rgba(200,162,50,.04);
 }
 
-.nav-item:hover .nav-gem {
-  color: var(--gold);
-}
-
 .nav-item.active {
   color: var(--gold-light);
-}
-
-.nav-item.active .nav-gem {
-  color: var(--gold);
-  text-shadow: 0 0 8px rgba(200,162,50,.7);
-}
-
-.nav-item.active::before {
-  content: '';
-  position: absolute;
-  left: 0;
-  top: 8px;
-  bottom: 8px;
-  width: 3px;
-  background: linear-gradient(180deg, transparent, var(--gold), transparent);
-  border-radius: 0 2px 2px 0;
 }
 
 .nav-item--unread::after {
@@ -413,6 +323,39 @@ body::after {
   color: var(--gold-light);
 }
 
+.sidebar-community {
+  padding: 0 14px 10px;
+}
+
+.discord-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  width: 100%;
+  padding: 8px 12px;
+  border: 1px solid rgba(88, 101, 242, .42);
+  border-radius: 3px;
+  background: rgba(88, 101, 242, .08);
+  color: #aeb6ff;
+  font-family: 'Cormorant SC', Georgia, serif;
+  font-size: 13px;
+  letter-spacing: .08em;
+  cursor: pointer;
+  transition: background .2s, border-color .2s, color .2s;
+}
+
+.discord-btn svg {
+  width: 17px;
+  height: 17px;
+}
+
+.discord-btn:hover {
+  background: rgba(88, 101, 242, .18);
+  border-color: #7280ff;
+  color: #e0e3ff;
+}
+
 /* ── Content area ────────────────────────────────────────── */
 .content {
   flex: 1;
@@ -441,33 +384,6 @@ body::after {
   text-align: center;
 }
 
-.content-eyebrow {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  margin-bottom: 6px;
-}
-
-.eyebrow-line {
-  flex: 1;
-  height: 1px;
-  background: linear-gradient(90deg, transparent, var(--gold-dark));
-}
-
-.eyebrow-line:last-child {
-  background: linear-gradient(90deg, var(--gold-dark), transparent);
-}
-
-.eyebrow-text {
-  font-family: 'Cinzel', serif;
-  font-size: 12px;
-  letter-spacing: .42em;
-  color: var(--gold);
-  text-transform: uppercase;
-  white-space: nowrap;
-  text-shadow: 0 0 10px rgba(200,162,50,.5);
-}
-
 .content-title {
   font-family: 'Cinzel', serif;
   font-size: 22px;
@@ -481,49 +397,48 @@ body::after {
   filter: drop-shadow(0 0 20px rgba(200,162,50,.3));
 }
 
-.content-ornament {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  margin-top: 12px;
-  padding: 0 40px;
-}
-
-.orn-line {
-  flex: 1;
-  height: 1px;
-  background: linear-gradient(90deg, transparent, var(--gold-dark) 50%, transparent);
-}
-
-.orn-gem {
-  color: var(--gold-light);
-  font-size: 12px;
-  text-shadow: 0 0 10px rgba(200,162,50,.8);
-}
-
-.orn-gem-sm {
-  font-size: 12px;
-  opacity: .6;
-}
-
 /* ── Tab panels ──────────────────────────────────────────── */
 .tab-panel { display: none; flex-direction: column; flex: 1; min-height: 0; }
 .tab-panel.active { display: flex; }
-
-.panel-footer {
-  margin-top: auto;
-  padding-top: 16px;
-  text-align: center;
-  font-size: 12px;
-  color: var(--text-dim);
-  letter-spacing: .04em;
-}
 
 /* ── News ────────────────────────────────────────────────── */
 .news-list {
   display: flex;
   flex-direction: column;
   gap: 12px;
+}
+
+.news-actions {
+  display: flex;
+  justify-content: center;
+  margin-top: 18px;
+}
+
+.news-more-btn {
+  min-width: 110px;
+  text-align: center;
+  padding: 10px 18px;
+  border: 1px solid var(--gold-dim);
+  background: rgba(200, 162, 50, .08);
+  color: var(--gold-light);
+  font-family: 'Cinzel', serif;
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: .1em;
+  text-transform: uppercase;
+  cursor: pointer;
+  transition: background .2s, border-color .2s, box-shadow .2s;
+}
+
+.news-more-btn:hover:not(:disabled) {
+  background: rgba(200, 162, 50, .16);
+  border-color: var(--gold);
+  box-shadow: 0 0 12px rgba(200, 162, 50, .1);
+}
+
+.news-more-btn:disabled {
+  opacity: .4;
+  cursor: not-allowed;
 }
 
 .news-placeholder {
@@ -565,7 +480,7 @@ body::after {
 .news-entry__hero {
   height: 180px;
   background-size: cover;
-  background-position: center;
+  background-position: top;
   background-color: rgba(20, 16, 8, .8);
 }
 
@@ -688,6 +603,80 @@ body::after {
   font-weight: 600;
   color: var(--text);
   letter-spacing: .06em;
+}
+
+.setting-label-row {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+}
+
+.setting-label-help {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.path-help {
+  width: 19px;
+  height: 19px;
+  padding: 0;
+  border: 1px solid rgba(200, 162, 50, .55);
+  border-radius: 50%;
+  background: rgba(200, 162, 50, .08);
+  color: var(--gold-light);
+  font-family: 'Encode Sans', system-ui, sans-serif;
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 17px;
+  text-align: center;
+  cursor: help;
+}
+
+.path-help:hover {
+  background: rgba(200, 162, 50, .18);
+  border-color: var(--gold);
+}
+
+.path-help-tooltip {
+  position: absolute;
+  z-index: 80;
+  top: calc(100% + 8px);
+  left: 0;
+  width: 340px;
+  padding: 11px 13px;
+  border: 1px solid rgba(200, 162, 50, .4);
+  border-radius: 3px;
+  background: rgba(10, 14, 20, .98);
+  color: var(--text);
+  font-family: 'Encode Sans', system-ui, sans-serif;
+  font-size: 12px;
+  font-weight: 400;
+  line-height: 1.55;
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transform: translateY(-4px);
+  transition: opacity .15s, transform .15s, visibility .15s;
+  box-shadow: 0 8px 20px rgba(0, 0, 0, .35);
+}
+
+.path-help-tooltip code {
+  color: var(--gold-light);
+  font-family: 'Encode Sans', system-ui, sans-serif;
+  font-size: .95em;
+}
+
+.path-help:hover + .path-help-tooltip,
+.path-help:focus-visible + .path-help-tooltip {
+  opacity: 1;
+  visibility: visible;
+  transform: translateY(0);
+}
+
+.setting-label-row .setting-value {
+  font-size: 13px;
 }
 
 .setting-control {
@@ -890,14 +879,6 @@ body::after {
   justify-content: center;
 }
 
-.patch-uninstall-btn.hidden {
-  display: none;
-}
-
-.patch-download-btn.hidden {
-  display: none;
-}
-
 .patch-status {
   display: inline-flex;
   align-items: center;
@@ -907,10 +888,6 @@ body::after {
   font-weight: 700;
   letter-spacing: .06em;
   color: #7ac87a;
-}
-
-.patch-status.hidden {
-  display: none;
 }
 
 .patch-status__icon {
@@ -987,10 +964,6 @@ body::after {
   cursor: not-allowed;
 }
 
-.patch-repair-btn.hidden {
-  display: none;
-}
-
 .patch-uninstall-btn {
   padding: 10px 24px;
   background: transparent;
@@ -1020,10 +993,6 @@ body::after {
   font-size: 13px;
   color: var(--text-muted);
   font-style: italic;
-}
-
-.patch-no-path.hidden {
-  display: none;
 }
 
 .patch-progress {
@@ -1078,6 +1047,9 @@ body::after {
   background: rgba(0,0,0,.5);
   border: 1px solid var(--divider);
   border-radius: 4px;
+  user-select: text;
+  -webkit-user-select: text;
+  cursor: text;
   font-family: 'Courier New', monospace;
   font-size: 13px;
   line-height: 1.7;
@@ -1165,9 +1137,25 @@ body::after {
 .changelog-content {
   max-height: 50vh;
   overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: var(--gold-dim) rgba(7, 10, 18, .72);
   font-size: 14px;
   line-height: 1.7;
   color: var(--text-dim);
+}
+
+.changelog-content::-webkit-scrollbar { width: 6px; }
+.changelog-content::-webkit-scrollbar-track {
+  background: rgba(7, 10, 18, .72);
+  border-left: 1px solid rgba(200, 162, 50, .08);
+}
+.changelog-content::-webkit-scrollbar-thumb {
+  background: linear-gradient(180deg, var(--gold-dim), var(--gold-dark));
+  border: 1px solid rgba(232, 200, 88, .22);
+  border-radius: 4px;
+}
+.changelog-content::-webkit-scrollbar-thumb:hover {
+  background: var(--gold-light);
 }
 
 .changelog-content h3 {
@@ -1212,6 +1200,20 @@ body::after {
 .modal-btn-cancel {
   background: rgba(255,255,255,.04);
   color: var(--text-dim);
+}
+
+.modal-btn-secondary {
+  background: rgba(255, 255, 255, .05);
+  color: var(--gold-light);
+}
+
+.modal-btn-secondary:hover {
+  background: rgba(200, 162, 50, .12);
+  border-color: var(--gold);
+}
+
+.modal-actions--split {
+  flex-wrap: wrap;
 }
 
 .modal-btn-cancel:hover {
@@ -1276,12 +1278,102 @@ body::after {
   :root { --sidebar-w: 190px; }
   .sidebar-logo { padding: 24px 0 6px; }
   .logo-img { width: 70px; height: 70px; }
-  .logo-glow { width: 90px; height: 90px; }
   .nav-item { padding: 10px 18px; font-size: 14px; }
   .play-btn { padding: 12px 0; font-size: 16px; }
   .content { padding: 20px 16px 16px; }
   .content-title { font-size: 17px; }
   .modal-box { width: 90%; min-width: 280px; }
+}
+
+.banner__btn {
+  flex-shrink: 0;
+  padding: 5px 16px;
+  background: rgba(200, 162, 50, 0.15);
+  border: 1px solid rgba(200, 162, 50, 0.35);
+  border-radius: 4px;
+  font-family: 'Cinzel', serif;
+  font-size: 12px;
+  color: #e8e0d0;
+  cursor: pointer;
+  letter-spacing: 0.5px;
+}
+
+.banner__btn:hover {
+  background: rgba(200, 162, 50, 0.3);
+  border-color: rgba(200, 162, 50, 0.5);
+}
+
+/* ── Setup banner (no game path) ────────────────────────── */
+.setup-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 16px;
+  margin-bottom: 12px;
+  background: rgba(200, 162, 50, 0.12);
+  border: 1px solid rgba(200, 162, 50, 0.45);
+  border-radius: 6px;
+  box-shadow: 0 0 8px rgba(200, 162, 50, 0.1);
+  font-family: 'Crimson Text', serif;
+  font-size: 14px;
+  color: #c8a232;
+}
+
+/* ── Path warning banner (invalid game path) ────────────── */
+.path-warn-banner {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 16px;
+  margin-bottom: 12px;
+  background: rgba(224, 96, 96, 0.1);
+  border: 1px solid rgba(224, 96, 96, 0.4);
+  border-radius: 6px;
+  box-shadow: 0 0 8px rgba(224, 96, 96, 0.1);
+  font-family: 'Crimson Text', serif;
+  font-size: 14px;
+  color: var(--red);
+}
+
+/* ── Launcher update banner ────────────────────────────── */
+.launcher-update-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 16px;
+  margin-bottom: 12px;
+  background: rgba(200, 162, 50, 0.12);
+  border: 1px solid rgba(200, 162, 50, 0.45);
+  border-left: 3px solid var(--gold);
+  border-radius: 6px;
+  box-shadow: 0 0 8px rgba(200, 162, 50, 0.1);
+  font-family: 'Crimson Text', serif;
+  font-size: 14px;
+  color: var(--gold-light);
+}
+
+.path-help--banner {
+  flex-shrink: 0;
+  margin-left: auto;
+}
+
+.path-help-tooltip--banner {
+  left: auto;
+  right: 48px;
+  top: calc(100% + 6px);
+}
+
+.settings-data-path {
+  margin-top: auto;
+  padding-top: 12px;
+  text-align: center;
+  font-size: 11px;
+  color: var(--text-dim);
+  opacity: 0.6;
 }
 
 /* ── Reduced motion ──────────────────────────────────────── */
@@ -1290,4 +1382,240 @@ body::after {
     animation-duration: 0s !important;
     transition-duration: 0s !important;
   }
+}
+
+/* ── Project Rx panel system ─────────────────────────────── */
+:root {
+  --gold: #c89b3c;
+  --gold-light: #e2c578;
+  --gold-dark: #9f742b;
+  --gold-dim: #6f5428;
+  --text: #eee7d8;
+  --text-dim: #bbb4a7;
+  --text-muted: #8e8a82;
+  --input-bg: #0a1118;
+  --input-border: #38404a;
+  --divider: #3a352d;
+  --bg: #070d14;
+  --bg-panel: #151718;
+  --sidebar-bg: rgba(6, 12, 19, .97);
+}
+
+body {
+  font-family: 'Encode Sans', system-ui, sans-serif;
+  background: radial-gradient(circle at 78% 12%, #142131 0, #090f17 45%, #050a10 100%);
+}
+
+.sidebar {
+  border-right-color: rgba(200, 155, 60, .28);
+  box-shadow: 12px 0 34px rgba(0, 0, 0, .28);
+}
+
+.sidebar-logo {
+  flex-direction: column;
+  align-items: center;
+  padding: 34px 0 18px;
+}
+
+.logo-img {
+  width: 94px;
+  height: 94px;
+  animation: none;
+  filter: drop-shadow(0 4px 8px rgba(0, 0, 0, .5));
+}
+
+.sidebar-wordmark {
+  margin-top: 6px;
+  font-family: 'Cormorant SC', Georgia, serif;
+  font-size: 20px;
+  letter-spacing: .12em;
+  color: var(--text);
+}
+
+.sidebar-wordmark span { color: var(--gold-light); }
+
+.server-status,
+.news-entry,
+.patch-card,
+.setting-row,
+.setup-banner,
+.path-warn-banner,
+.launcher-update-banner,
+.modal-box {
+  background: linear-gradient(100deg, rgba(31, 29, 25, .96), rgba(16, 21, 27, .96));
+  border: 1px solid rgba(126, 111, 82, .25);
+  border-left: 3px solid var(--gold-dark);
+  border-radius: 2px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, .18);
+}
+
+.server-status { margin: 0 14px 12px; padding: 12px 16px; }
+.status-dot.online { animation: none; box-shadow: none; }
+.status-label,
+.nav-item,
+.play-btn,
+.sidebar-changelog,
+.content-title,
+.news-entry__title,
+.news-entry__tag,
+.patch-card__label,
+.patch-card__value,
+.setting-label,
+.setting-btn,
+.news-more-btn,
+.patch-download-btn,
+.patch-repair-btn,
+.patch-uninstall-btn,
+.modal-title,
+.modal-btn,
+.banner__btn {
+  font-family: 'Cormorant SC', Georgia, serif;
+}
+
+.nav-item {
+  margin: 2px 12px;
+  width: calc(100% - 24px);
+  padding: 11px 16px;
+  border-left: 2px solid transparent;
+  letter-spacing: .09em;
+}
+
+.nav-item:hover,
+.nav-item.active {
+  color: var(--gold-light);
+  background: rgba(200, 155, 60, .08);
+  border-left-color: var(--gold);
+}
+
+.nav-item.active::before { display: none; }
+
+.nav-item:focus-visible,
+button:focus-visible,
+input:focus-visible,
+.tab-panel:focus-visible {
+  outline: 2px solid var(--gold-light);
+  outline-offset: 2px;
+}
+
+.content { padding-top: 46px; }
+.content-header { text-align: left; margin-bottom: 22px; }
+.content-title { font-size: 27px; letter-spacing: .06em; text-shadow: none; }
+.content-subtitle { margin-top: 4px; color: var(--text-muted); font-size: 13px; }
+.news-entry { overflow: hidden; }
+.news-entry__rule { background: rgba(200, 155, 60, .24); }
+.news-entry__arrow { border-radius: 2px; box-shadow: none; }
+.patch-card { align-items: flex-start; }
+.setting-row { padding: 18px 20px; }
+
+.play-btn,
+.patch-download-btn,
+.modal-btn-confirm {
+  background: linear-gradient(180deg, #c99a3b, #8b6021);
+  border-color: #dbb65a;
+  box-shadow: none;
+  text-shadow: none;
+}
+
+.play-btn::before,
+.patch-download-btn::before { display: none; }
+.play-btn:hover:not(:disabled),
+.patch-download-btn:hover:not(:disabled),
+.modal-btn-confirm:hover { background: linear-gradient(180deg, #d9ae51, #9e712a); box-shadow: none; }
+.patch-progress-fill { box-shadow: none; }
+.patch-log .log-line { opacity: 1; animation: none; }
+.modal-overlay { background: rgba(2, 6, 10, .82); backdrop-filter: blur(3px); }
+.toast { font-family: 'Encode Sans', system-ui, sans-serif; box-shadow: 0 8px 24px rgba(0,0,0,.35); }
+
+/* Primary actions: a warm panel treatment shared by Play and patch download. */
+.play-btn,
+.patch-download-btn {
+  background: linear-gradient(100deg, rgba(43, 37, 25, .98), rgba(17, 22, 28, .98));
+  border: 1px solid rgba(200, 162, 50, .5);
+  border-left: 1px solid rgba(200, 162, 50, .5);
+  border-bottom: 1px solid rgba(200, 162, 50, .28);
+  color: var(--gold-light);
+  letter-spacing: .18em;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, .75);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .06), 0 6px 16px rgba(0, 0, 0, .28);
+}
+
+.play-btn:hover:not(:disabled),
+.patch-download-btn:hover:not(:disabled) {
+  background: linear-gradient(100deg, rgba(58, 48, 29, .98), rgba(21, 28, 35, .98));
+  border-color: var(--gold);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .08), 0 8px 20px rgba(0, 0, 0, .34);
+}
+
+.play-btn:disabled,
+.patch-download-btn:disabled {
+  background: linear-gradient(100deg, rgba(28, 27, 23, .82), rgba(15, 19, 24, .82));
+  border-color: rgba(126, 111, 82, .28);
+  border-left-color: rgba(126, 111, 82, .28);
+  color: var(--text-muted);
+  opacity: .45;
+  box-shadow: none;
+}
+
+.server-status { border-left: 1px solid rgba(126, 111, 82, .28); }
+.patch-card { border-left: 1px solid rgba(126, 111, 82, .28); }
+
+/* Responsive type keeps the compact launcher readable at both minimum and
+   full window sizes without letting headings overwhelm the content. */
+.status-label { font-size: clamp(14px, 1.35vw, 18px); }
+.status-players { font-size: clamp(13px, 1.2vw, 16px); }
+.nav-item { font-size: clamp(14px, 1.45vw, 17px); }
+.sidebar-patch-status { font-size: clamp(12px, 1.05vw, 14px); }
+.play-btn { font-size: clamp(17px, 1.65vw, 21px); }
+.sidebar-changelog { font-size: clamp(13px, 1.1vw, 15px); }
+.content-title { font-size: clamp(24px, 2.5vw, 32px); }
+.content-subtitle { font-size: clamp(14px, 1.2vw, 16px); }
+.patch-card__label { font-size: clamp(12px, 1.05vw, 14px); }
+.patch-card__value { font-size: clamp(18px, 1.6vw, 22px); }
+.patch-install-path { font-size: clamp(14px, 1.25vw, 17px); }
+
+@media (max-width: 760px) {
+  .sidebar-wordmark { font-size: 17px; }
+  .content { padding-top: 40px; }
+  .patch-cards { gap: 8px; }
+  .patch-card { padding: 14px 10px; }
+}
+
+@media (max-height: 500px) {
+  .sidebar-logo { padding: 18px 0 6px; }
+  .logo-img { width: 58px; height: 58px; }
+  .sidebar-wordmark { margin-top: 2px; font-size: 15px; }
+  .server-status { margin-bottom: 4px; padding: 8px 14px; }
+  .status-players { font-size: clamp(12px, 1.2vw, 15px); }
+  .sidebar-nav { padding: 2px 0; }
+  .nav-item { padding-top: 7px; padding-bottom: 7px; }
+  .sidebar-bottom { padding: 8px 14px 10px; }
+  .sidebar-patch-status { margin-bottom: 4px; }
+  .play-btn { padding: 10px 0; font-size: clamp(16px, 1.7vw, 19px); }
+  .sidebar-changelog { margin-top: 5px; font-size: clamp(12px, 1.1vw, 14px); }
+  .launcher-version { left: 26px; width: 132px; font-size: 9px; }
+  .content { padding-top: 36px; }
+  .content-header { margin-bottom: 14px; }
+  .content-title { font-size: clamp(22px, 3vw, 28px); }
+}
+
+/* Let the transparent Tauri window show through gently instead of feeling
+   like a fully opaque slab, while keeping the UI layers readable. */
+body {
+  background: radial-gradient(circle at 78% 12%,
+    rgba(20, 33, 49, .94) 0,
+    rgba(9, 15, 23, .90) 45%,
+    rgba(5, 10, 16, .86) 100%);
+}
+
+:root { --sidebar-bg: rgba(6, 12, 19, .91); }
+
+.server-status,
+.news-entry,
+.patch-card,
+.setting-row,
+.setup-banner,
+.path-warn-banner,
+.launcher-update-banner,
+.modal-box {
+  background: linear-gradient(100deg, rgba(31, 29, 25, .91), rgba(16, 21, 27, .91));
 }

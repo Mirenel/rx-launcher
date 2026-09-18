@@ -38,6 +38,7 @@ window.addEventListener("DOMContentLoaded", function () {
   var SETTINGS_FILE = 'settings.json';
   var settings = { game_path: null, installed_patch_version: null, keep_open: false, minimize_to_tray: false, last_news_date: null };
   var config = null;
+  var settingsSaveQueue = Promise.resolve();
 
   function loadSettings() {
     return tauriFs.readTextFile(SETTINGS_FILE, { baseDir: BaseDir.AppConfig })
@@ -59,15 +60,33 @@ window.addEventListener("DOMContentLoaded", function () {
 
   function saveSettings() {
     var data = JSON.stringify(settings, null, 2);
-    return tauriFs.writeTextFile(SETTINGS_FILE, data, { baseDir: BaseDir.AppConfig })
-      .catch(function () {
-        // AppConfig directory may not exist on first run — create and retry
-        return tauriFs.mkdir('.', { baseDir: BaseDir.AppConfig, recursive: true })
-          .then(function () {
-            return tauriFs.writeTextFile(SETTINGS_FILE, data, { baseDir: BaseDir.AppConfig });
-          });
-      });
+    var write = function () {
+      return tauriFs.writeTextFile(SETTINGS_FILE, data, { baseDir: BaseDir.AppConfig })
+        .catch(function () {
+          // AppConfig directory may not exist on first run — create and retry
+          return tauriFs.mkdir('.', { baseDir: BaseDir.AppConfig, recursive: true })
+            .then(function () {
+              return tauriFs.writeTextFile(SETTINGS_FILE, data, { baseDir: BaseDir.AppConfig });
+            });
+        });
+    };
+    // Serialize writes so a rapid checkbox/path/news interaction cannot
+    // overwrite a newer settings snapshot with an older one.
+    settingsSaveQueue = settingsSaveQueue.catch(function () {}).then(write);
+    return settingsSaveQueue;
   }
+
+  function saveSettingsWithFeedback(successMessage) {
+    return saveSettings().then(function () {
+      if (successMessage) showToast(successMessage);
+    }).catch(function (e) {
+      showToast('Could not save settings');
+      throw e;
+    });
+  }
+
+  // ── Disable right-click context menu ────────────────────
+  document.addEventListener('contextmenu', function (e) { e.preventDefault(); });
 
   // ── Titlebar controls ───────────────────────────────────
   document.getElementById('btn-minimize').addEventListener('click', function () {
@@ -86,31 +105,60 @@ window.addEventListener("DOMContentLoaded", function () {
 
   // ── Tab switching ───────────────────────────────────────
   var newsNavBtn = document.querySelector('.nav-item[data-tab="news"]');
+  var allNavItems = document.querySelectorAll('.nav-item');
+  var allTabPanels = document.querySelectorAll('.tab-panel');
+  var latestNewsDate = null;
+
+  function switchToTab(name) {
+    allNavItems.forEach(function (b) {
+      var selected = b.dataset.tab === name;
+      b.classList.toggle('active', selected);
+      b.setAttribute('aria-selected', selected ? 'true' : 'false');
+      // Keep every navigation tab reachable with Tab; arrow keys still move
+      // between tabs for users who prefer roving keyboard navigation.
+      b.tabIndex = 0;
+    });
+    allTabPanels.forEach(function (p) {
+      var selected = p.id === 'tab-' + name;
+      p.classList.toggle('active', selected);
+      p.hidden = !selected;
+    });
+    var btn = document.querySelector('.nav-item[data-tab="' + name + '"]');
+    if (btn) btn.classList.add('active');
+    var panel = document.getElementById('tab-' + name);
+    if (panel) panel.classList.add('active');
+    if (name === 'news' && latestNewsDate) {
+      newsNavBtn.classList.remove('nav-item--unread');
+      settings.last_news_date = latestNewsDate;
+      saveSettings().catch(function () { showToast('Could not save news state'); });
+    }
+  }
+
   document.querySelectorAll('.nav-item[data-tab]').forEach(function (btn) {
     btn.addEventListener('click', function () {
-      document.querySelectorAll('.nav-item').forEach(function (b) { b.classList.remove('active'); });
-      document.querySelectorAll('.tab-panel').forEach(function (p) { p.classList.remove('active'); });
-      btn.classList.add('active');
-      var panel = document.getElementById('tab-' + btn.dataset.tab);
-      if (panel) panel.classList.add('active');
-      if (btn.dataset.tab === 'news' && latestNewsDate) {
-        newsNavBtn.classList.remove('nav-item--unread');
-        settings.last_news_date = latestNewsDate;
-        saveSettings();
-      }
+      switchToTab(btn.dataset.tab);
+    });
+    btn.addEventListener('keydown', function (e) {
+      if (e.key !== 'ArrowDown' && e.key !== 'ArrowRight' && e.key !== 'ArrowUp' && e.key !== 'ArrowLeft') return;
+      e.preventDefault();
+      var items = Array.prototype.slice.call(allNavItems);
+      var direction = (e.key === 'ArrowDown' || e.key === 'ArrowRight') ? 1 : -1;
+      var next = items[(items.indexOf(btn) + direction + items.length) % items.length];
+      switchToTab(next.dataset.tab);
+      next.focus();
     });
   });
-  var latestNewsDate = null;
 
   // ── Element references ──────────────────────────────────
   var statusDot = document.getElementById('status-dot');
   var statusLabel = document.getElementById('status-label');
   var statusPlayers = document.getElementById('status-players');
   var newsList = document.getElementById('news-list');
+  var viewMoreNewsBtn = document.getElementById('view-more-news');
   var patchCurrentEl = document.getElementById('patch-current');
   var patchInstalledEl = document.getElementById('patch-installed');
   var sidebarPatchStatus = document.getElementById('sidebar-patch-status');
-  var wowExeStatus = document.getElementById('wow-exe-status');
+  var rxWowStatus = document.getElementById('rx-wow-status');
   var patchInstallPath = document.getElementById('patch-install-path');
   var downloadBtn = document.getElementById('download-patch-btn');
   var patchStatus = document.getElementById('patch-status');
@@ -121,27 +169,44 @@ window.addEventListener("DOMContentLoaded", function () {
   var patchProgressText = document.getElementById('patch-progress-text');
   var gamePathInput = document.getElementById('game-path');
   var playBtn = document.getElementById('play-btn');
+  var playBtnText = playBtn.querySelector('.play-btn-text');
   var patchBtn = document.getElementById('patch-btn');
   var realmlistStatus = document.getElementById('realmlist-status');
   var patchModal = document.getElementById('patch-modal');
   var modalCancel = document.getElementById('modal-cancel');
+  var modalRepair = document.getElementById('modal-repair');
   var modalConfirm = document.getElementById('modal-confirm');
   var modalWarnTitle = document.getElementById('modal-warn-title');
   var modalWarnBody = document.getElementById('modal-warn-body');
+  var modalWarnQuestion = document.getElementById('modal-warn-question');
   var updateModal = document.getElementById('update-modal');
   var updateModalBody = document.getElementById('update-modal-body');
   var updateSkip = document.getElementById('update-skip');
   var updateDownload = document.getElementById('update-download');
   var updateFromPlay = false;
+  var launcherUpdateModal = document.getElementById('launcher-update-modal');
+  var launcherUpdateModalBody = document.getElementById('launcher-update-modal-body');
+  var launcherUpdateSkip = document.getElementById('launcher-update-skip');
+  var launcherUpdateInstall = document.getElementById('launcher-update-install');
+  var launcherUpdateBanner = document.getElementById('launcher-update-banner');
+  var launcherUpdateBannerBody = document.getElementById('launcher-update-banner-body');
+  var launcherUpdateBannerBtn = document.getElementById('launcher-update-banner-btn');
+  var launcherUpdateNotice = null;
   var keepOpenCb = document.getElementById('keep-open-cb');
   var minimizeTrayCb = document.getElementById('minimize-tray-cb');
   var linkModal = document.getElementById('link-modal');
   var linkModalUrl = document.getElementById('link-modal-url');
   var linkCancel = document.getElementById('link-cancel');
   var linkOpen = document.getElementById('link-open');
+  var discordBtn = document.getElementById('discord-btn');
+  var discordModal = document.getElementById('discord-modal');
+  var discordInviteUrlEl = document.getElementById('discord-invite-url');
+  var discordCancel = document.getElementById('discord-cancel');
+  var discordCopy = document.getElementById('discord-copy');
+  var discordOpen = document.getElementById('discord-open');
   var changelogBtn = document.getElementById('changelog-btn');
+  var launcherVersion = document.getElementById('launcher-version');
   var changelogModal = document.getElementById('changelog-modal');
-  var changelogTitle = document.getElementById('changelog-title');
   var changelogContent = document.getElementById('changelog-content');
   var changelogClose = document.getElementById('changelog-close');
   var repairBtn = document.getElementById('repair-btn');
@@ -150,23 +215,26 @@ window.addEventListener("DOMContentLoaded", function () {
   var repairConfirm = document.getElementById('repair-confirm');
   var uninstallBtn = document.getElementById('uninstall-btn');
   var uninstallModal = document.getElementById('uninstall-modal');
+  var uninstallBody = document.getElementById('uninstall-body');
+  var uninstallWarn = document.getElementById('uninstall-warn');
   var uninstallCancel = document.getElementById('uninstall-cancel');
   var uninstallConfirm = document.getElementById('uninstall-confirm');
 
-  var launcherUpdateModal = document.getElementById('launcher-update-modal');
-  var launcherUpdateVersion = document.getElementById('launcher-update-version');
-  var launcherUpdateNotes = document.getElementById('launcher-update-notes');
-  var launcherUpdateDl = document.getElementById('launcher-update-dl');
-  var launcherUpdateStatus = document.getElementById('launcher-update-status');
-  var launcherUpdateFill = document.getElementById('launcher-update-fill');
-  var launcherUpdateActions = document.getElementById('launcher-update-actions');
-  var launcherUpdateLater = document.getElementById('launcher-update-later');
-  var launcherUpdateNow = document.getElementById('launcher-update-now');
+  var gamePathStatus = document.getElementById('game-path-status');
+  var setupBanner = document.getElementById('setup-banner');
+  var pathWarnBanner = document.getElementById('path-warn-banner');
+  var pathWarnText = document.getElementById('path-warn-text');
 
   var pendingLinkUrl = null;
+  // Keep the community action usable without a remote launcher manifest.
+  var discordInviteUrl = 'https://discord.gg/VTWnWbqJYE';
+  var pendingLaunchAction = null;
   var hasGamePath = false;
   var patchInstalled = false;
   var patchOutdated = false;
+  var patchManifestReady = false;
+
+  discordBtn.classList.remove('hidden');
 
   // ── Server status ───────────────────────────────────────
   var statusChecking = false;
@@ -177,7 +245,11 @@ window.addEventListener("DOMContentLoaded", function () {
       if (result.online) {
         statusDot.className = 'status-dot online';
         statusLabel.textContent = 'Online';
-        statusPlayers.textContent = result.players + ' player' + (result.players !== 1 ? 's' : '') + ' online';
+        if (typeof result.players === 'number') {
+          statusPlayers.textContent = result.players + ' player' + (result.players !== 1 ? 's' : '') + ' online';
+        } else {
+          statusPlayers.textContent = 'Player count unavailable';
+        }
       } else {
         statusDot.className = 'status-dot offline';
         statusLabel.textContent = 'Offline';
@@ -200,8 +272,17 @@ window.addEventListener("DOMContentLoaded", function () {
         return;
       }
       newsList.innerHTML = '';
+      items = items.map(function (item, index) {
+        return { item: item, index: index, timestamp: Date.parse(item.date) };
+      }).sort(function (a, b) {
+        var aValid = !isNaN(a.timestamp);
+        var bValid = !isNaN(b.timestamp);
+        if (aValid && bValid && a.timestamp !== b.timestamp) return b.timestamp - a.timestamp;
+        if (aValid !== bValid) return aValid ? -1 : 1;
+        return a.index - b.index;
+      }).map(function (wrapped) { return wrapped.item; });
 
-      items.forEach(function (item) {
+      items.slice(0, 1).forEach(function (item) {
         var entry = document.createElement('article');
         var hasImg = item.image && item.image.length > 0;
         var cls = 'news-entry';
@@ -209,8 +290,9 @@ window.addEventListener("DOMContentLoaded", function () {
         if (hasImg && !item.featured) cls += ' news-entry--has-img';
         entry.className = cls;
 
-        var arrowHtml = item.url
-          ? '<button class="news-entry__arrow" data-url="' + esc(item.url) + '">' +
+        var allowedUrl = isAllowedProjectRxUrl(item.url);
+        var arrowHtml = allowedUrl
+          ? '<button class="news-entry__arrow" data-url="' + esc(item.url) + '" aria-label="Read ' + esc(item.title) + '">' +
               '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">' +
                 '<path d="M9 18l6-6-6-6"/>' +
               '</svg>' +
@@ -255,7 +337,7 @@ window.addEventListener("DOMContentLoaded", function () {
         var newsActive = newsNavBtn.classList.contains('active');
         if (newsActive) {
           settings.last_news_date = latestNewsDate;
-          saveSettings();
+          saveSettings().catch(function () { showToast('Could not save news state'); });
         } else {
           newsNavBtn.classList.add('nav-item--unread');
         }
@@ -274,6 +356,23 @@ window.addEventListener("DOMContentLoaded", function () {
     });
   }
 
+  viewMoreNewsBtn.addEventListener('click', function () {
+    pendingLinkUrl = 'https://projectrx.net/#news';
+    linkModalUrl.textContent = pendingLinkUrl;
+    showModal(linkModal);
+  });
+
+  function isAllowedProjectRxUrl(value) {
+    try {
+      var parsed = new URL(value);
+      return parsed.protocol === 'https:' &&
+        parsed.username === '' && parsed.password === '' && parsed.port === '' &&
+        (parsed.hostname === 'projectrx.net' || parsed.hostname === 'www.projectrx.net');
+    } catch (e) {
+      return false;
+    }
+  }
+
   // ── Patch display ───────────────────────────────────────
   function updatePatchInstallPath() {
     if (settings.game_path) {
@@ -283,27 +382,62 @@ window.addEventListener("DOMContentLoaded", function () {
     }
   }
 
-  function checkWowExe() {
+  function checkGameDirectory() {
     if (!settings.game_path) {
-      wowExeStatus.textContent = 'No game directory set';
-      wowExeStatus.className = 'patch-card__value';
-      return;
+      gamePathStatus.textContent = 'No directory set';
+      gamePathStatus.className = 'setting-value';
+      rxWowStatus.textContent = 'Not installed';
+      rxWowStatus.className = 'patch-card__value patch-not-installed';
+      setGamePathValid(false);
+      return Promise.resolve(false);
     }
-    invoke('check_wow_exe', { gamePath: settings.game_path }).then(function (result) {
-      if (result.status === 'patched') {
-        wowExeStatus.textContent = 'Patched';
-        wowExeStatus.className = 'patch-value patch-up-to-date';
-      } else if (result.status === 'original') {
-        wowExeStatus.textContent = 'Not patched';
-        wowExeStatus.className = 'patch-value patch-not-installed';
+    return invoke('check_game_directory', { gamePath: settings.game_path }).then(function (result) {
+      var valid = !!result.has_wow && !!result.has_data && !!result.has_addons;
+      rxWowStatus.textContent = result.has_rx_wow ? 'Installed' : 'Not installed';
+      rxWowStatus.className = result.has_rx_wow
+        ? 'patch-card__value patch-up-to-date'
+        : 'patch-card__value patch-not-installed';
+      setGamePathValid(valid);
+      if (valid) {
+        gamePathStatus.textContent = 'Valid game directory';
+        gamePathStatus.className = 'setting-value ok';
+      } else if (!result.has_wow) {
+        gamePathStatus.textContent = 'Wow.exe missing';
+        gamePathStatus.className = 'setting-value err';
+      } else if (!result.has_data) {
+        gamePathStatus.textContent = 'Data folder missing';
+        gamePathStatus.className = 'setting-value err';
       } else {
-        wowExeStatus.textContent = 'Not found';
-        wowExeStatus.className = 'patch-value patch-not-installed';
+        gamePathStatus.textContent = 'Interface/AddOns folder missing';
+        gamePathStatus.className = 'setting-value err';
       }
-    }).catch(function () {
-      wowExeStatus.textContent = 'Error';
-      wowExeStatus.className = 'patch-value patch-not-installed';
+      pathWarnBanner.classList.add('hidden');
+      return valid;
+    }).catch(function (e) {
+      setGamePathValid(false);
+      gamePathStatus.textContent = 'Directory not found';
+      gamePathStatus.className = 'setting-value err';
+      rxWowStatus.textContent = 'Unavailable';
+      rxWowStatus.className = 'patch-card__value patch-not-installed';
+      var msg = String(e);
+      if (msg.indexOf('not found') !== -1) {
+        pathWarnText.textContent = 'Game directory not found \u2014 update your path in Settings.';
+      } else {
+        pathWarnText.textContent = 'Game directory is invalid \u2014 update your path in Settings.';
+      }
+      pathWarnBanner.classList.remove('hidden');
+      setupBanner.classList.add('hidden');
+      return false;
     });
+  }
+
+  function setGamePathValid(valid) {
+    hasGamePath = !!valid;
+    playBtn.disabled = !hasGamePath || downloading;
+    patchBtn.disabled = !hasGamePath;
+    patchNoPath.classList.toggle('hidden', hasGamePath);
+    if (downloadBtn && (!patchInstalled || patchOutdated)) downloadBtn.disabled = !patchManifestReady || !hasGamePath || downloading;
+    updatePatchDisplay();
   }
 
   function updatePatchDisplay() {
@@ -312,7 +446,23 @@ window.addEventListener("DOMContentLoaded", function () {
     var currentVersion = config.patch_version;
     var installedVersion = settings.installed_patch_version;
 
-    patchCurrentEl.textContent = currentVersion;
+    patchCurrentEl.textContent = patchManifestReady ? currentVersion : 'Unavailable';
+    downloadBtn.disabled = !patchManifestReady || !hasGamePath || downloading;
+    uninstallBtn.classList.add('hidden');
+    repairBtn.classList.add('hidden');
+
+    if (!patchManifestReady) {
+      patchInstalled = !!installedVersion;
+      patchOutdated = false;
+      patchInstalledEl.textContent = installedVersion || 'Not Installed';
+      patchInstalledEl.className = installedVersion
+        ? 'patch-card__value patch-outdated'
+        : 'patch-card__value patch-not-installed';
+      sidebarPatchStatus.textContent = 'Content unavailable';
+      sidebarPatchStatus.className = 'sidebar-patch-status outdated';
+      patchStatus.classList.add('hidden');
+      return;
+    }
 
     if (installedVersion) {
       patchInstalledEl.textContent = installedVersion;
@@ -349,7 +499,7 @@ window.addEventListener("DOMContentLoaded", function () {
       patchInstalled = false;
       patchOutdated = false;
       patchInstalledEl.textContent = 'Not Installed';
-      patchInstalledEl.className = 'patch-value patch-not-installed';
+      patchInstalledEl.className = 'patch-card__value patch-not-installed';
       sidebarPatchStatus.textContent = 'Patch required';
       sidebarPatchStatus.className = 'sidebar-patch-status';
       if (hasGamePath) downloadBtn.disabled = false;
@@ -375,6 +525,44 @@ window.addEventListener("DOMContentLoaded", function () {
   function setProgress(pct) {
     patchProgressFill.style.width = pct + '%';
     patchProgressText.textContent = pct + '%';
+  }
+
+  // ── Download speed / ETA ────────────────────────────────
+  var speedHistory = [];
+
+  function getSpeedText(dl, total) {
+    if (total === 0) return '';
+    var now = Date.now();
+    if (speedHistory.length > 0 && dl < speedHistory[speedHistory.length - 1].bytes) {
+      speedHistory = [];
+    }
+    speedHistory.push({ time: now, bytes: dl });
+    while (speedHistory.length > 1 && now - speedHistory[0].time > 3000) {
+      speedHistory.shift();
+    }
+    if (speedHistory.length < 2) return '';
+    var first = speedHistory[0];
+    var dt = (now - first.time) / 1000;
+    if (dt < 0.5) return '';
+    var speed = (dl - first.bytes) / dt;
+    if (speed <= 0) return '';
+    var parts = [];
+    if (speed >= 1048576) parts.push((speed / 1048576).toFixed(1) + ' MB/s');
+    else if (speed >= 1024) parts.push(Math.round(speed / 1024) + ' KB/s');
+    else parts.push(Math.round(speed) + ' B/s');
+    var remaining = total - dl;
+    var eta = remaining / speed;
+    if (eta > 1 && eta < 86400) {
+      if (eta < 60) {
+        parts.push('~' + Math.ceil(eta) + 's left');
+      } else {
+        var m = Math.floor(eta / 60);
+        var s = Math.ceil(eta % 60);
+        if (s === 60) { m++; s = 0; }
+        parts.push('~' + m + ':' + (s < 10 ? '0' : '') + s + ' left');
+      }
+    }
+    return parts.join(', ');
   }
 
   var fadeOutTimer = null;
@@ -404,6 +592,8 @@ window.addEventListener("DOMContentLoaded", function () {
     downloading = true;
     downloadBtn.disabled = true;
     repairBtn.disabled = true;
+    playBtn.disabled = true;
+    speedHistory = [];
     if (fadeOutTimer) { clearTimeout(fadeOutTimer); fadeOutTimer = null; }
     patchProgress.classList.remove('fade-out');
     patchProgress.classList.add('visible');
@@ -421,54 +611,61 @@ window.addEventListener("DOMContentLoaded", function () {
       var d = event.payload;
       setProgress(10 + Math.round(d.percent * 0.85));
       if (d.log) {
-        var cls = d.message.indexOf('installed') !== -1 ? 'log-ok' : '';
+        var cls = d.message.indexOf('Backing up') !== -1 ? 'log-warn'
+                : d.message.indexOf('installed') !== -1 ? 'log-ok' : '';
         patchLogLine(d.message, cls);
       } else {
-        patchProgressText.textContent = d.message;
+        var st = d.bytes_total > 0 ? getSpeedText(d.bytes_downloaded, d.bytes_total) : '';
+        patchProgressText.textContent = d.message + (st ? ' \u2014 ' + st : '');
       }
     }).then(function (fn) {
       unlisten = fn;
-      return invoke('check_wow_exe', { gamePath: settings.game_path });
-    }).then(function (result) {
-      setProgress(5);
-      if (result.status === 'patched' && !force) {
-        patchLogLine('Wow.exe already up to date.', 'log-ok');
-      } else if (result.status === 'original') {
-        patchLogLine('Backing up and patching Wow.exe...', 'log-warn');
-        return invoke('patch_wow_exe', { gamePath: settings.game_path }).then(function (msg) {
-          patchLogLine(msg, 'log-ok');
-        });
-      } else {
-        patchLogLine(force ? 'Re-installing patched Wow.exe...' : 'Installing patched Wow.exe...');
-        return invoke('patch_wow_exe', { gamePath: settings.game_path }).then(function (msg) {
-          patchLogLine(msg, 'log-ok');
-        });
-      }
     }).then(function () {
       setProgress(10);
-      patchLogLine(force ? 'Verifying and re-downloading corrupted files...' : 'Starting file downloads...');
-      return invoke('download_patch', { gamePath: settings.game_path }, 600000);
+      patchLogLine(force ? 'Verifying and re-installing Project Rx content...' : 'Preparing Project Rx content...');
+      // Patch mutations deliberately have no UI timeout: the backend may still be
+      // writing files, and allowing a retry would start a concurrent mutation.
+      return invoke('download_patch', { gamePath: settings.game_path, repair: !!force });
     }).then(function (version) {
       setProgress(96);
-      patchLogLine('All files downloaded and installed!', 'log-ok');
+      patchLogLine('All content prepared and installed!', 'log-ok');
       settings.installed_patch_version = version;
       return saveSettings();
     }).then(function () {
       setProgress(100);
       patchLogLine(label + ' complete!', 'log-ok');
       repairBtn.disabled = false;
+      playBtn.disabled = false;
       downloading = false;
       updatePatchDisplay();
-      checkWowExe();
+      checkGameDirectory();
+      // Auto-set realmlist only if not found (don't overwrite user's custom realmlist)
+      invoke('check_realmlist', { gamePath: settings.game_path }).catch(function (e) {
+        if (String(e).indexOf('not found') !== -1) {
+          return invoke('patch_realmlist', { gamePath: settings.game_path }).then(function () {
+            patchLogLine('Realmlist set to projectrx.net', 'log-ok');
+            checkRealmlist();
+          });
+        }
+      }).catch(function () {});
       if (unlisten) unlisten();
       fadeOutProgress(2000);
     }).catch(function (e) {
-      patchLogLine('Error: ' + (e || 'patch failed'), 'log-warn');
+      var msg = e ? String(e) : '';
+      if (msg.indexOf('timed out') !== -1 || msg.indexOf('Timeout') !== -1) {
+        msg = 'Download timed out. Check your internet connection and try again.';
+      } else if (!msg) {
+        msg = 'An unexpected error occurred. Try again, or use Repair if the problem persists.';
+      }
+      patchLogLine(msg, 'log-warn');
       downloadBtn.disabled = false;
       repairBtn.disabled = false;
+      playBtn.disabled = false;
       downloading = false;
+      updatePatchDisplay();
+      checkGameDirectory();
       if (unlisten) unlisten();
-      fadeOutProgress(3000);
+      fadeOutProgress(5000);
     });
   }
 
@@ -484,6 +681,9 @@ window.addEventListener("DOMContentLoaded", function () {
   repairCancel.addEventListener('click', function () {
     hideModal(repairModal);
   });
+  repairModal.addEventListener('click', function (e) {
+    if (e.target === repairModal) hideModal(repairModal);
+  });
 
   repairConfirm.addEventListener('click', function () {
     hideModal(repairModal);
@@ -495,23 +695,30 @@ window.addEventListener("DOMContentLoaded", function () {
     tauriDialog.open({
       multiple: false,
       directory: true,
-      title: 'Select WoW Directory'
+      title: 'Select Game Directory'
     }).then(function (path) {
       if (path) {
         settings.game_path = path;
-        saveSettings();
-        showToast('Game directory set');
         gamePathInput.value = path;
-        playBtn.disabled = false;
-        patchBtn.disabled = false;
-        hasGamePath = true;
-        patchNoPath.classList.add('hidden');
-        updatePatchInstallPath();
-        checkWowExe();
-        if (!patchInstalled || patchOutdated) downloadBtn.disabled = false;
-        checkRealmlist();
+        setupBanner.classList.add('hidden');
+        pathWarnBanner.classList.add('hidden');
+        setGamePathValid(false);
+        saveSettingsWithFeedback('Game directory saved').then(function () {
+          return checkGameDirectory();
+        }).then(function (valid) {
+          if (valid) checkRealmlist();
+        }).catch(function () {});
       }
-    }).catch(function () {});
+    }).catch(function () { showToast('Could not open folder picker'); });
+  });
+
+  // ── Setup / path warning banners ───────────────────────
+  document.getElementById('setup-banner-btn').addEventListener('click', function () {
+    document.getElementById('browse-btn').click();
+  });
+
+  document.getElementById('path-warn-btn').addEventListener('click', function () {
+    document.getElementById('browse-btn').click();
   });
 
   // ── Realmlist ───────────────────────────────────────────
@@ -527,7 +734,8 @@ window.addEventListener("DOMContentLoaded", function () {
   }
 
   patchBtn.addEventListener('click', function () {
-    if (!settings.game_path) return;
+    if (!settings.game_path || patchBtn.disabled) return;
+    patchBtn.disabled = true;
     invoke('patch_realmlist', { gamePath: settings.game_path }).then(function (result) {
       realmlistStatus.textContent = result;
       realmlistStatus.className = 'setting-value ok';
@@ -535,6 +743,8 @@ window.addEventListener("DOMContentLoaded", function () {
     }).catch(function (e) {
       realmlistStatus.textContent = String(e);
       realmlistStatus.className = 'setting-value err';
+    }).finally(function () {
+      patchBtn.disabled = false;
     });
   });
 
@@ -546,14 +756,12 @@ window.addEventListener("DOMContentLoaded", function () {
       settings.minimize_to_tray = false;
       minimizeTrayCb.checked = false;
     }
-    saveSettings();
-    showToast('Settings saved');
+    saveSettingsWithFeedback('Settings saved').catch(function () {});
   });
 
   minimizeTrayCb.addEventListener('change', function () {
     settings.minimize_to_tray = minimizeTrayCb.checked;
-    saveSettings();
-    showToast('Settings saved');
+    saveSettingsWithFeedback('Settings saved').catch(function () {});
   });
 
   // ── Changelog modal ─────────────────────────────────────
@@ -563,6 +771,7 @@ window.addEventListener("DOMContentLoaded", function () {
     showModal(changelogModal);
     if (changelogLoaded) return;
     invoke('get_changelog', {}, 10000).then(function (entries) {
+      changelogLoaded = true;
       if (!entries || entries.length === 0) {
         changelogContent.innerHTML = '<div class="news-placeholder">No changelog available.</div>';
         return;
@@ -576,7 +785,6 @@ window.addEventListener("DOMContentLoaded", function () {
         html += '</ul>';
       });
       changelogContent.innerHTML = html;
-      changelogLoaded = true;
     }).catch(function () {
       changelogContent.innerHTML = '<div class="news-placeholder">Could not load changelog.</div>';
     });
@@ -585,53 +793,204 @@ window.addEventListener("DOMContentLoaded", function () {
   changelogClose.addEventListener('click', function () {
     hideModal(changelogModal);
   });
-
-  // ── Warning modals ──────────────────────────────────────
-  function showModal(overlay) { overlay.classList.add('visible'); }
-  function hideModal(overlay) { overlay.classList.remove('visible'); }
-
-  modalCancel.addEventListener('click', function () { hideModal(patchModal); });
-  patchModal.addEventListener('click', function (e) {
-    if (e.target === patchModal) hideModal(patchModal);
+  changelogModal.addEventListener('click', function (e) {
+    if (e.target === changelogModal) hideModal(changelogModal);
   });
 
-  function launchGame() {
+  // ── Warning modals ──────────────────────────────────────
+  var modalReturnFocus = new WeakMap();
+  function showModal(overlay) {
+    modalReturnFocus.set(overlay, document.activeElement);
+    overlay.hidden = false;
+    overlay.classList.add('visible');
+    var target = overlay.querySelector('button:not([disabled]):not(.hidden)') || overlay.querySelector('[tabindex="-1"]');
+    if (target) target.focus();
+  }
+  function hideModal(overlay) {
+    overlay.classList.remove('visible');
+    overlay.hidden = true;
+    var target = modalReturnFocus.get(overlay);
+    if (target && document.contains(target)) target.focus();
+  }
+
+  modalCancel.addEventListener('click', function () {
+    hideModal(patchModal);
+    modalRepair.classList.add('hidden');
+    pendingLaunchAction = null;
+  });
+  patchModal.addEventListener('click', function (e) {
+    if (e.target === patchModal) {
+      hideModal(patchModal);
+      modalRepair.classList.add('hidden');
+      pendingLaunchAction = null;
+    }
+  });
+
+  modalRepair.addEventListener('click', function () {
+    hideModal(patchModal);
+    modalRepair.classList.add('hidden');
+    pendingLaunchAction = null;
+    startPatchDownload(true);
+  });
+
+  // Escape key closes the topmost visible modal
+  document.addEventListener('keydown', function (e) {
+    if (e.key === 'Tab') {
+      var visible = document.querySelector('.modal-overlay.visible');
+      if (visible) {
+        var focusable = visible.querySelectorAll('button:not([disabled]):not(.hidden), [href], input:not([disabled]), [tabindex]:not([tabindex="-1"])');
+        if (focusable.length) {
+          var first = focusable[0];
+          var last = focusable[focusable.length - 1];
+          if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+          else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+        }
+      }
+    }
+    if (e.key !== 'Escape') return;
+    var modals = [changelogModal, repairModal, uninstallModal, linkModal, discordModal, launcherUpdateModal, updateModal, patchModal];
+    for (var i = 0; i < modals.length; i++) {
+      if (modals[i].classList.contains('visible')) {
+        hideModal(modals[i]);
+        if (modals[i] === patchModal) {
+          modalRepair.classList.add('hidden');
+          pendingLaunchAction = null;
+        }
+        if (modals[i] === updateModal) updateFromPlay = false;
+        return;
+      }
+    }
+  });
+
+  function doLaunch() {
     invoke('launch_game', { gamePath: settings.game_path }).then(function () {
       if (!settings.keep_open) {
         tauriProcess.exit(0);
       } else if (settings.minimize_to_tray) {
         appWindow.hide();
+      } else {
+        showToast('Game launched');
       }
-    }).catch(function () {
+    }).catch(function (e) {
       modalWarnTitle.textContent = 'Launch Failed';
-      modalWarnBody.textContent = 'Could not start the game. Make sure Wow.exe exists in your game directory.';
+      modalWarnBody.textContent = String(e).indexOf('rx-wow.exe not found') !== -1
+        ? 'rx-wow.exe is not installed in the selected game directory. Use Patch or Repair to install it first.'
+        : String(e).indexOf('Wine is required') !== -1
+        ? 'Wine is required to launch the Windows game client on Linux. Install Wine and try again.'
+        : 'Could not start rx-wow.exe. Make sure the game directory is accessible and try again.';
+      modalWarnQuestion.classList.add('hidden');
+      modalConfirm.classList.add('hidden');
+      modalRepair.classList.remove('hidden');
+      modalCancel.textContent = 'Close';
+      pendingLaunchAction = null;
+      showModal(patchModal);
+    });
+  }
+
+  function launchGame() {
+    invoke('check_realmlist', { gamePath: settings.game_path }).then(function () {
+      doLaunch();
+    }).catch(function (e) {
+      var msg = String(e);
+      var body;
+      if (msg.indexOf('points elsewhere') !== -1) {
+        body = 'Your realmlist is pointing to a different server. You can update it in Settings.';
+      } else if (msg.indexOf('not found') !== -1) {
+        body = 'The realmlist.wtf file was not found. You can set it in Settings.';
+      } else {
+        body = 'Could not verify your realmlist configuration. You can check it in Settings.';
+      }
+      modalWarnTitle.textContent = 'Realmlist Not Set';
+      modalWarnBody.textContent = body;
+      modalWarnQuestion.classList.remove('hidden');
+      modalRepair.classList.add('hidden');
+      modalConfirm.classList.remove('hidden');
+      modalCancel.textContent = 'Cancel';
+      pendingLaunchAction = doLaunch;
       showModal(patchModal);
     });
   }
 
   modalConfirm.addEventListener('click', function () {
     hideModal(patchModal);
-    launchGame();
+    modalRepair.classList.add('hidden');
+    if (pendingLaunchAction) {
+      var action = pendingLaunchAction;
+      pendingLaunchAction = null;
+      action();
+    }
   });
 
   updateSkip.addEventListener('click', function () {
+    var shouldLaunch = updateFromPlay;
+    updateFromPlay = false;
     hideModal(updateModal);
-    if (updateFromPlay) launchGame();
+    if (shouldLaunch) launchGame();
   });
 
   updateModal.addEventListener('click', function (e) {
-    if (e.target === updateModal) hideModal(updateModal);
+    if (e.target === updateModal) {
+      hideModal(updateModal);
+      updateFromPlay = false;
+    }
   });
 
   updateDownload.addEventListener('click', function () {
+    updateFromPlay = false;
     hideModal(updateModal);
-    document.querySelectorAll('.nav-item').forEach(function (b) { b.classList.remove('active'); });
-    document.querySelectorAll('.tab-panel').forEach(function (p) { p.classList.remove('active'); });
-    var patchNavBtn = document.querySelector('.nav-item[data-tab="patch"]');
-    if (patchNavBtn) patchNavBtn.classList.add('active');
-    var patchPanel = document.getElementById('tab-patch');
-    if (patchPanel) patchPanel.classList.add('active');
+    switchToTab('patch');
     downloadBtn.click();
+  });
+
+  launcherUpdateSkip.addEventListener('click', function () {
+    hideModal(launcherUpdateModal);
+  });
+
+  function showLauncherUpdatePrompt() {
+    if (!launcherUpdateNotice) return;
+    var message = 'Launcher version ' + launcherUpdateNotice.version + ' is available. Install it now?';
+    if (typeof launcherUpdateNotice.notes === 'string' && launcherUpdateNotice.notes.trim()) {
+      message += ' ' + launcherUpdateNotice.notes.trim();
+    }
+    launcherUpdateModalBody.textContent = message;
+    showModal(launcherUpdateModal);
+  }
+
+  launcherUpdateBannerBtn.addEventListener('click', function () {
+    showLauncherUpdatePrompt();
+  });
+
+  launcherUpdateModal.addEventListener('click', function (e) {
+    if (e.target === launcherUpdateModal) hideModal(launcherUpdateModal);
+  });
+
+  launcherUpdateInstall.addEventListener('click', function () {
+    launcherUpdateInstall.disabled = true;
+    launcherUpdateSkip.disabled = true;
+    launcherUpdateBannerBtn.disabled = true;
+    launcherUpdateInstall.textContent = 'Updating...';
+    launcherUpdateBannerBody.textContent = 'Downloading and verifying the launcher update...';
+    launcherUpdateModalBody.textContent = 'Downloading and verifying the launcher update...';
+    invoke('apply_launcher_update', null, 1200000).then(function () {
+      // A normal successful apply exits the old process before this resolves.
+      // This branch handles a race where the remote update disappears between
+      // the check and the user's confirmation.
+      launcherUpdateInstall.disabled = false;
+      launcherUpdateSkip.disabled = false;
+      launcherUpdateBannerBtn.disabled = false;
+      launcherUpdateInstall.textContent = 'Install Update';
+      launcherUpdateModalBody.textContent = 'No newer launcher update is available now.';
+      launcherUpdateNotice = null;
+      launcherUpdateBanner.hidden = true;
+      launcherUpdateBanner.classList.add('hidden');
+    }).catch(function (e) {
+      launcherUpdateInstall.disabled = false;
+      launcherUpdateSkip.disabled = false;
+      launcherUpdateBannerBtn.disabled = false;
+      launcherUpdateInstall.textContent = 'Install Update';
+      launcherUpdateBannerBody.textContent = 'Launcher update available — select Install Update to try again.';
+      launcherUpdateModalBody.textContent = 'The launcher update could not be installed: ' + String(e);
+    });
   });
 
   // ── External link modal ────────────────────────────────
@@ -642,10 +1001,55 @@ window.addEventListener("DOMContentLoaded", function () {
   linkOpen.addEventListener('click', function () {
     hideModal(linkModal);
     if (pendingLinkUrl) {
-      invoke('open_url', { url: pendingLinkUrl });
+      invoke('open_url', { url: pendingLinkUrl }).catch(function () {
+        showToast('Could not open link');
+      });
       pendingLinkUrl = null;
     }
   });
+
+  // ── Discord community modal ────────────────────────────
+  discordBtn.addEventListener('click', function () {
+    if (!discordInviteUrl) return;
+    discordInviteUrlEl.textContent = discordInviteUrl;
+    showModal(discordModal);
+  });
+  discordCancel.addEventListener('click', function () { hideModal(discordModal); });
+  discordModal.addEventListener('click', function (e) {
+    if (e.target === discordModal) hideModal(discordModal);
+  });
+  discordCopy.addEventListener('click', function () {
+    if (!discordInviteUrl) return;
+    copyToClipboard(discordInviteUrl).then(function () {
+      showToast('Discord invite copied');
+    }).catch(function () {
+      showToast('Could not copy Discord invite');
+    });
+  });
+  discordOpen.addEventListener('click', function () {
+    if (!discordInviteUrl) return;
+    hideModal(discordModal);
+    invoke('open_url', { url: discordInviteUrl }).catch(function () {
+      showToast('Could not open Discord invite');
+    });
+  });
+
+  function copyToClipboard(value) {
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      return navigator.clipboard.writeText(value);
+    }
+    var textarea = document.createElement('textarea');
+    textarea.value = value;
+    textarea.setAttribute('readonly', '');
+    textarea.style.position = 'fixed';
+    textarea.style.opacity = '0';
+    document.body.appendChild(textarea);
+    textarea.select();
+    var copied = false;
+    try { copied = document.execCommand('copy'); } catch (e) { copied = false; }
+    textarea.remove();
+    return copied ? Promise.resolve() : Promise.reject('Clipboard unavailable');
+  }
 
   // ── Uninstall ──────────────────────────────────────────
   uninstallCancel.addEventListener('click', function () { hideModal(uninstallModal); });
@@ -655,6 +1059,8 @@ window.addEventListener("DOMContentLoaded", function () {
 
   uninstallBtn.addEventListener('click', function () {
     if (!hasGamePath || downloading) return;
+    uninstallBody.textContent = 'This will remove all Project Rx patches and addons. Your other game files will not be affected.';
+    uninstallWarn.classList.add('hidden');
     showModal(uninstallModal);
   });
 
@@ -673,7 +1079,7 @@ window.addEventListener("DOMContentLoaded", function () {
     }).then(function () {
       patchLogLine('Uninstall complete.', 'log-ok');
       updatePatchDisplay();
-      checkWowExe();
+      checkGameDirectory();
     }).catch(function (e) {
       patchLogLine('Error: ' + (e || 'uninstall failed'), 'log-warn');
       uninstallBtn.classList.remove('hidden');
@@ -682,50 +1088,82 @@ window.addEventListener("DOMContentLoaded", function () {
   });
 
   // ── Play button ─────────────────────────────────────────
-  playBtn.addEventListener('click', function () {
+  function continuePlayFlow() {
     if (!patchInstalled) {
       modalWarnTitle.textContent = 'Patch Not Installed';
       modalWarnBody.textContent = 'The Project Rx patch is not installed. You may experience issues without it.';
+      modalWarnQuestion.classList.remove('hidden');
+      modalRepair.classList.remove('hidden');
+      modalConfirm.classList.remove('hidden');
+      modalCancel.textContent = 'Cancel';
+      pendingLaunchAction = launchGame;
       showModal(patchModal);
       return;
     }
     if (patchOutdated) {
       updateFromPlay = true;
-      updateModalBody.textContent = 'Your patch (' + esc(settings.installed_patch_version) + ') is outdated. Server requires ' + esc(config.patch_version) + '. Update now?';
+      updateModalBody.textContent = 'Your patch (' + settings.installed_patch_version + ') is outdated. Server requires ' + config.patch_version + '. Update now?';
       showModal(updateModal);
       return;
     }
     playBtn.disabled = true;
+    playBtnText.textContent = 'Verifying...';
     invoke('verify_patch', { gamePath: settings.game_path }, 30000).then(function (bad) {
       playBtn.disabled = false;
+      playBtnText.textContent = 'Play';
       if (bad.length > 0) {
         modalWarnTitle.textContent = 'Integrity Check Failed';
-        modalWarnBody.textContent = 'The following files failed verification: ' + bad.join(', ') + '. Use Repair on the Patch tab to fix this.';
+        modalWarnBody.textContent = 'The following files failed verification: ' + bad.join(', ') + '. Make sure your game directory is correct, then use Repair on the Patch tab.';
+        modalWarnQuestion.classList.remove('hidden');
+        modalRepair.classList.remove('hidden');
+        modalConfirm.classList.remove('hidden');
+        modalCancel.textContent = 'Cancel';
+        pendingLaunchAction = launchGame;
         showModal(patchModal);
       } else {
         launchGame();
       }
-    }).catch(function () {
+    }).catch(function (e) {
       playBtn.disabled = false;
-      launchGame();
+      playBtnText.textContent = 'Play';
+      modalWarnTitle.textContent = 'Verification Unavailable';
+      modalWarnBody.textContent = 'The launcher could not verify the patch: ' + String(e || 'unknown error') + '. You can use Repair, or explicitly continue at your own risk.';
+      modalWarnQuestion.classList.remove('hidden');
+      modalRepair.classList.remove('hidden');
+      modalConfirm.classList.remove('hidden');
+      modalCancel.textContent = 'Cancel';
+      pendingLaunchAction = launchGame;
+      showModal(patchModal);
     });
+  }
+
+  playBtn.addEventListener('click', function () {
+    continuePlayFlow();
   });
 
   // ── Initialization ──────────────────────────────────────
   Promise.all([
-    invoke('get_launcher_config'),
+    invoke('get_launcher_config', null, 10000),
     loadSettings()
   ]).then(function (results) {
     config = results[0];
+    changelogBtn.textContent = 'Changelog v' + config.launcher_version;
+    launcherVersion.textContent = 'Launcher v' + config.launcher_version;
 
     if (settings.game_path) {
       gamePathInput.value = settings.game_path;
-      playBtn.disabled = false;
-      patchBtn.disabled = false;
-      hasGamePath = true;
-      patchNoPath.classList.add('hidden');
-      checkRealmlist();
-      checkWowExe();
+      setupBanner.classList.add('hidden');
+      setGamePathValid(false);
+      checkGameDirectory().then(function (valid) {
+        if (valid) {
+          checkRealmlist();
+          if (patchOutdated) {
+            updateFromPlay = false;
+            updateModalBody.textContent = 'A new patch version is available (' + config.patch_version + '). You currently have ' + settings.installed_patch_version + ' installed. Would you like to download it?';
+            showModal(updateModal);
+          }
+        }
+      });
     }
 
     keepOpenCb.checked = settings.keep_open;
@@ -733,11 +1171,22 @@ window.addEventListener("DOMContentLoaded", function () {
     minimizeTrayCb.disabled = !settings.keep_open;
     updatePatchDisplay();
 
-    if (patchOutdated && hasGamePath) {
-      updateFromPlay = false;
-      updateModalBody.textContent = 'A new patch version is available (' + esc(config.patch_version) + '). You currently have ' + esc(settings.installed_patch_version) + ' installed. Would you like to download it?';
-      showModal(updateModal);
-    }
+    // Content metadata is independently authenticated and may be hosted by
+    // either configured Project Rx source. It must not prevent the launcher
+    // shell from starting when both sources are temporarily unavailable.
+    invoke('get_patch_manifest', null, 25000).then(function (info) {
+      config.patch_version = info.version;
+      patchManifestReady = true;
+      updatePatchDisplay();
+      if (settings.game_path && hasGamePath && patchOutdated) {
+        updateFromPlay = false;
+        updateModalBody.textContent = 'A new patch version is available (' + config.patch_version + '). You currently have ' + settings.installed_patch_version + ' installed. Would you like to download it?';
+        showModal(updateModal);
+      }
+    }).catch(function () {
+      patchManifestReady = false;
+      updatePatchDisplay();
+    });
 
     checkStatus();
     var statusInterval = setInterval(checkStatus, 30000);
@@ -747,66 +1196,37 @@ window.addEventListener("DOMContentLoaded", function () {
         statusInterval = null;
       } else {
         checkStatus();
-        statusInterval = setInterval(checkStatus, 30000);
+        if (!statusInterval) statusInterval = setInterval(checkStatus, 30000);
       }
     });
     loadNews();
-    checkLauncherUpdate();
+
+    // Update discovery is asynchronous and never blocks launcher startup. The
+    // user must confirm before any download or replacement begins.
+    setTimeout(function () {
+      invoke('check_launcher_update', null, 40000).then(function (notice) {
+        if (!notice || !notice.version) return;
+        launcherUpdateNotice = notice;
+        launcherUpdateBannerBody.textContent = 'Launcher v' + notice.version + ' is available.';
+        launcherUpdateBanner.hidden = false;
+        launcherUpdateBanner.classList.remove('hidden');
+        showLauncherUpdatePrompt();
+      }).catch(function () {});
+    }, 500);
+
+    // Show launcher data path in settings
+    var tauriPath = window.__TAURI__.path;
+    if (tauriPath && tauriPath.appConfigDir) {
+      tauriPath.appConfigDir().then(function (dir) {
+        document.getElementById('settings-data-path').textContent = 'Launcher data: ' + dir;
+      }).catch(function () {});
+    }
+  }).catch(function () {
+    statusLabel.textContent = 'Launcher unavailable';
+    statusPlayers.textContent = '';
+    showToast('Could not load launcher configuration');
   });
 
-  // ── Launcher self-update ────────────────────────────────
-  var pendingUpdate = null;
-
-  launcherUpdateLater.addEventListener('click', function () { hideModal(launcherUpdateModal); });
-  launcherUpdateModal.addEventListener('click', function (e) {
-    if (e.target === launcherUpdateModal) hideModal(launcherUpdateModal);
-  });
-
-  launcherUpdateNow.addEventListener('click', function () {
-    if (!pendingUpdate) return;
-    var update = pendingUpdate;
-    pendingUpdate = null;
-    launcherUpdateActions.classList.add('hidden');
-    launcherUpdateDl.classList.remove('hidden');
-    launcherUpdateStatus.textContent = 'Downloading update...';
-
-    var totalSize = 0;
-    var downloadedSize = 0;
-
-    update.downloadAndInstall(function (event) {
-      if (event.event === 'Started') {
-        totalSize = event.data.contentLength || 0;
-      } else if (event.event === 'Progress') {
-        downloadedSize += event.data.chunkLength || 0;
-        if (totalSize > 0) {
-          var pct = Math.min(99, Math.round(downloadedSize / totalSize * 100));
-          launcherUpdateFill.style.width = pct + '%';
-        }
-      } else if (event.event === 'Finished') {
-        launcherUpdateFill.style.width = '100%';
-        launcherUpdateStatus.textContent = 'Installing update...';
-      }
-    }).then(function () {
-      launcherUpdateStatus.textContent = 'Restarting...';
-      tauriProcess.relaunch();
-    }).catch(function () {
-      launcherUpdateStatus.textContent = 'Update failed. Try again later.';
-      launcherUpdateActions.classList.remove('hidden');
-      launcherUpdateDl.classList.add('hidden');
-    });
-  });
-
-  function checkLauncherUpdate() {
-    var updater = window.__TAURI__ && window.__TAURI__.updater;
-    if (!updater) return;
-    updater.check().then(function (update) {
-      if (!update) return;
-      pendingUpdate = update;
-      launcherUpdateVersion.textContent = update.version;
-      launcherUpdateNotes.textContent = update.body || 'Bug fixes and improvements.';
-      showModal(launcherUpdateModal);
-    }).catch(function () { /* silent — update check is not critical */ });
-  }
 
   // ── Utility ─────────────────────────────────────────────
   function esc(str) {

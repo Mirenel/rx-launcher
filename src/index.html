@@ -10,11 +10,12 @@
 </head>
 <body>
 
-  <!-- Window controls (floating) -->
-  <div class="drag-zone" id="drag-zone"></div>
-  <div class="window-controls">
-    <div class="wc-btn" id="btn-minimize">&#x2013;</div>
-    <div class="wc-btn wc-close" id="btn-close">&#x2715;</div>
+  <div class="drag-zone" id="drag-zone">
+    <div class="launcher-version" id="launcher-version">Launcher v0.1.2</div>
+  </div>
+  <div class="window-controls" aria-label="Window controls">
+    <button class="wc-btn" id="btn-minimize" aria-label="Minimize window">&#x2013;</button>
+    <button class="wc-btn wc-close" id="btn-close" aria-label="Close launcher">&#x2715;</button>
   </div>
 
   <!-- Main layout -->
@@ -23,100 +24,91 @@
     <!-- Sidebar -->
     <aside class="sidebar">
       <div class="sidebar-logo">
-        <div class="logo-glow"></div>
         <img src="/images/rx1.webp" alt="Project Rx" class="logo-img" draggable="false">
-      </div>
-
-      <div class="sidebar-rule">
-        <span class="rule-line"></span>
-        <span class="rule-rune">ᚷᛁᚾᚾᚨᚱᚢᚾᚨᛉ</span>
-        <span class="rule-line"></span>
+        <div class="sidebar-wordmark">Project <span>Rx</span></div>
       </div>
 
       <div class="server-status" id="server-status">
         <div class="status-dot offline" id="status-dot"></div>
         <div class="status-info">
-          <span class="status-label" id="status-label">Checking...</span>
+          <span class="status-label" id="status-label" aria-live="polite">Checking...</span>
           <span class="status-players" id="status-players"></span>
         </div>
       </div>
 
-      <nav class="sidebar-nav">
-        <button class="nav-item active" data-tab="news">
-          <span class="nav-gem">&#9670;</span> News
-        </button>
-        <button class="nav-item" data-tab="patch">
-          <span class="nav-gem">&#9670;</span> Patch
-        </button>
-        <button class="nav-item" data-tab="settings">
-          <span class="nav-gem">&#9670;</span> Settings
-        </button>
+      <nav class="sidebar-nav" role="tablist" aria-label="Launcher sections">
+        <button class="nav-item active" data-tab="news" role="tab" aria-selected="true" aria-controls="tab-news">News</button>
+        <button class="nav-item" data-tab="patch" role="tab" aria-selected="false" aria-controls="tab-patch">Patch</button>
+        <button class="nav-item" data-tab="settings" role="tab" aria-selected="false" aria-controls="tab-settings">Settings</button>
       </nav>
+
+      <div class="sidebar-community">
+        <button class="discord-btn" id="discord-btn" type="button" aria-label="Open Project Rx Discord">
+          <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+            <path fill="currentColor" d="M19.54 5.17A16.9 16.9 0 0 0 15.5 4l-.5 1.02a15.2 15.2 0 0 0-4.99 0L9.5 4a16.9 16.9 0 0 0-4.04 1.17C2.9 8.9 2.2 12.54 2.55 16.13A16.7 16.7 0 0 0 7.5 18.6l1.2-1.63c-.66-.24-1.28-.54-1.86-.9l.45-.34c3.58 1.67 7.46 1.67 11 0l.45.34c-.58.36-1.2.66-1.86.9l1.2 1.63a16.7 16.7 0 0 0 4.95-2.47c.41-4.17-.7-7.78-3.49-10.96ZM8.86 14.2c-1.06 0-1.93-.98-1.93-2.18s.85-2.18 1.93-2.18 1.94.98 1.93 2.18c0 1.2-.85 2.18-1.93 2.18Zm6.28 0c-1.06 0-1.93-.98-1.93-2.18s.85-2.18 1.93-2.18 1.94.98 1.93 2.18c0 1.2-.85 2.18-1.93 2.18Z"/>
+          </svg>
+          <span>Discord</span>
+        </button>
+      </div>
 
       <div class="sidebar-bottom">
         <div class="sidebar-patch-status" id="sidebar-patch-status">Patch required</div>
         <button class="play-btn" id="play-btn" disabled>
           <span class="play-btn-text">Play</span>
         </button>
-        <button class="sidebar-changelog" id="changelog-btn">Changelog v0.1.0</button>
+        <button class="sidebar-changelog" id="changelog-btn">Changelog v0.1.2</button>
       </div>
     </aside>
 
     <!-- Content area -->
     <main class="content">
+      <div class="setup-banner" id="setup-banner">
+        <span>No game directory set &mdash; select your game folder to get started.</span>
+        <button class="banner__btn" id="setup-banner-btn">Set Path</button>
+      </div>
+      <div class="path-warn-banner hidden" id="path-warn-banner">
+        <span id="path-warn-text">Game directory not found.</span>
+        <button class="path-help path-help--banner" type="button" aria-label="Show the required game folder structure" aria-describedby="path-help-banner-tooltip">?</button>
+        <span class="path-help-tooltip path-help-tooltip--banner" id="path-help-banner-tooltip" role="tooltip">Choose the standard WoW root folder: it must contain <code>Wow.exe</code>, with <code>Data</code> beside it. Do not choose the <code>Data</code> or <code>Interface</code> subfolder.</span>
+        <button class="banner__btn" id="path-warn-btn">Update Path</button>
+      </div>
+      <div class="launcher-update-banner hidden" id="launcher-update-banner" role="status" aria-live="polite">
+        <span id="launcher-update-banner-body">A launcher update is available.</span>
+        <button class="banner__btn" id="launcher-update-banner-btn">Install Update</button>
+      </div>
 
       <!-- News tab -->
-      <section class="tab-panel active" id="tab-news">
+      <section class="tab-panel active" id="tab-news" role="tabpanel" tabindex="0">
         <div class="content-header">
-          <div class="content-eyebrow">
-            <span class="eyebrow-line"></span>
-            <span class="eyebrow-text">Dispatches</span>
-            <span class="eyebrow-line"></span>
-          </div>
           <h2 class="content-title">News &amp; Announcements</h2>
-          <div class="content-ornament">
-            <span class="orn-line"></span>
-            <span class="orn-gem">&#9670;</span>
-            <span class="orn-gem orn-gem-sm">&#9670;</span>
-            <span class="orn-gem">&#9670;</span>
-            <span class="orn-line"></span>
-          </div>
+          <p class="content-subtitle">Latest dispatches from Project Rx</p>
         </div>
         <div class="news-list" id="news-list">
           <div class="news-placeholder">Loading...</div>
         </div>
-        <div class="panel-footer">Project Rx &copy; 2026. All rights reserved.</div>
+        <div class="news-actions">
+          <button class="news-more-btn" id="view-more-news" type="button">View More News</button>
+        </div>
       </section>
 
       <!-- Patch tab -->
-      <section class="tab-panel" id="tab-patch">
+      <section class="tab-panel" id="tab-patch" role="tabpanel" tabindex="0" hidden>
         <div class="content-header">
-          <div class="content-eyebrow">
-            <span class="eyebrow-line"></span>
-            <span class="eyebrow-text">Updates</span>
-            <span class="eyebrow-line"></span>
-          </div>
           <h2 class="content-title">Patch Manager</h2>
-          <div class="content-ornament">
-            <span class="orn-line"></span>
-            <span class="orn-gem">&#9670;</span>
-            <span class="orn-gem orn-gem-sm">&#9670;</span>
-            <span class="orn-gem">&#9670;</span>
-            <span class="orn-line"></span>
-          </div>
+          <p class="content-subtitle">Install, verify, and repair game content</p>
         </div>
         <div class="patch-cards">
           <div class="patch-card">
-            <span class="patch-card__label">Server Version</span>
+            <span class="patch-card__label">Patch Version</span>
             <span class="patch-card__value" id="patch-current">v1.00</span>
           </div>
           <div class="patch-card">
-            <span class="patch-card__label">Installed</span>
+            <span class="patch-card__label">Installed Patch Version</span>
             <span class="patch-card__value patch-not-installed" id="patch-installed">Not Installed</span>
           </div>
           <div class="patch-card">
-            <span class="patch-card__label">Wow.exe</span>
-            <span class="patch-card__value" id="wow-exe-status">Checking...</span>
+            <span class="patch-card__label">rx-wow.exe</span>
+            <span class="patch-card__value patch-not-installed" id="rx-wow-status">Not installed</span>
           </div>
         </div>
         <div class="patch-install-path" id="patch-install-path"></div>
@@ -131,52 +123,46 @@
             <button class="patch-uninstall-btn hidden" id="uninstall-btn">Uninstall</button>
           </div>
           <div class="patch-no-path" id="patch-no-path">Set your game directory in Settings first</div>
-          <div class="patch-progress" id="patch-progress">
+          <div class="patch-progress" id="patch-progress" role="status" aria-live="polite">
             <span class="patch-progress-text" id="patch-progress-text">0%</span>
             <div class="patch-progress-track">
               <div class="patch-progress-fill" id="patch-progress-fill"></div>
             </div>
           </div>
-          <div class="patch-log" id="patch-log"></div>
+          <div class="patch-log" id="patch-log" role="log" aria-live="polite" aria-label="Patch download console"></div>
         </div>
-        <div class="panel-footer">Project Rx &copy; 2026. All rights reserved.</div>
       </section>
 
       <!-- Settings tab -->
-      <section class="tab-panel" id="tab-settings">
+      <section class="tab-panel" id="tab-settings" role="tabpanel" tabindex="0" hidden>
         <div class="content-header">
-          <div class="content-eyebrow">
-            <span class="eyebrow-line"></span>
-            <span class="eyebrow-text">Configuration</span>
-            <span class="eyebrow-line"></span>
-          </div>
           <h2 class="content-title">Settings</h2>
-          <div class="content-ornament">
-            <span class="orn-line"></span>
-            <span class="orn-gem">&#9670;</span>
-            <span class="orn-gem orn-gem-sm">&#9670;</span>
-            <span class="orn-gem">&#9670;</span>
-            <span class="orn-line"></span>
-          </div>
+          <p class="content-subtitle">Game location and launcher behavior</p>
         </div>
         <div class="settings-grid">
           <div class="setting-row">
-            <label class="setting-label" for="game-path">Game Directory</label>
+            <div class="setting-label-row">
+              <div class="setting-label-help">
+                <label class="setting-label" for="game-path">Game Directory</label>
+                <button class="path-help" type="button" aria-label="Show the required game folder structure" aria-describedby="path-help-tooltip">?</button>
+            <span class="path-help-tooltip" id="path-help-tooltip" role="tooltip">Choose the standard WoW root folder, for example <code>C:\Games\World of Warcraft</code> on Windows or <code>/home/user/Games/World of Warcraft</code> on Linux.<br><br>It must contain <code>Wow.exe</code> and a <code>Data</code> folder beside it. Do not select <code>Data</code> or <code>Interface</code> itself.</span>
+              </div>
+              <span class="setting-value" id="game-path-status">No directory set</span>
+            </div>
             <div class="setting-control">
-              <input type="text" id="game-path" class="setting-input" readonly placeholder="Select WoW directory...">
+              <input type="text" id="game-path" class="setting-input" readonly placeholder="Select game directory...">
               <button class="setting-btn" id="browse-btn">Browse</button>
             </div>
           </div>
           <div class="setting-row">
-            <label class="setting-label">Realmlist</label>
+            <div class="setting-label-row">
+              <label class="setting-label">Realmlist</label>
+              <span class="setting-value" id="realmlist-status">No game directory set</span>
+            </div>
             <div class="setting-control">
               <input type="text" class="setting-input" value="set realmlist projectrx.net" readonly>
               <button class="setting-btn" id="patch-btn" disabled>Set</button>
             </div>
-          </div>
-          <div class="setting-row">
-            <label class="setting-label">Status</label>
-            <span class="setting-value" id="realmlist-status">No game directory set</span>
           </div>
           <div class="setting-row">
             <label class="setting-label">After Launch</label>
@@ -192,30 +178,32 @@
             </div>
           </div>
         </div>
-        <div class="panel-footer">Project Rx &copy; 2026. All rights reserved.</div>
+        <div class="settings-data-path" id="settings-data-path"></div>
       </section>
 
     </main>
   </div>
 
   <!-- Patch warning modal -->
-  <div class="modal-overlay" id="patch-modal">
-    <div class="modal-box">
+  <div class="modal-overlay" id="patch-modal" role="dialog" aria-modal="true" aria-labelledby="modal-warn-title" hidden>
+    <div class="modal-box" tabindex="-1">
       <div class="modal-title" id="modal-warn-title">Patch Not Installed</div>
       <div class="modal-body" id="modal-warn-body">The Project Rx patch is not installed. You may experience issues without it.</div>
-      <div class="modal-body">Continue anyway?</div>
+      <div class="modal-body" id="modal-warn-question">Continue anyway?</div>
       <div class="modal-actions">
         <button class="modal-btn modal-btn-cancel" id="modal-cancel">Cancel</button>
+        <button class="modal-btn modal-btn-secondary hidden" id="modal-repair">Repair</button>
         <button class="modal-btn modal-btn-confirm" id="modal-confirm">Play Anyway</button>
       </div>
     </div>
   </div>
 
   <!-- Uninstall confirmation modal -->
-  <div class="modal-overlay" id="uninstall-modal">
-    <div class="modal-box">
-      <div class="modal-title">Uninstall Project Rx</div>
-      <div class="modal-body">This will remove all Project Rx patches, addons, and restore your original Wow.exe. Your other game files will not be affected.</div>
+  <div class="modal-overlay" id="uninstall-modal" role="dialog" aria-modal="true" aria-labelledby="uninstall-title" hidden>
+    <div class="modal-box" tabindex="-1">
+      <div class="modal-title" id="uninstall-title">Uninstall Project Rx</div>
+      <div class="modal-body" id="uninstall-body">This will remove all Project Rx patches and addons. Your other game files will not be affected.</div>
+      <div class="modal-body hidden" id="uninstall-warn"></div>
       <div class="modal-body">Continue?</div>
       <div class="modal-actions">
         <button class="modal-btn modal-btn-cancel" id="uninstall-cancel">Cancel</button>
@@ -225,9 +213,9 @@
   </div>
 
   <!-- External link confirmation modal -->
-  <div class="modal-overlay" id="link-modal">
-    <div class="modal-box">
-      <div class="modal-title">Open External Link</div>
+  <div class="modal-overlay" id="link-modal" role="dialog" aria-modal="true" aria-labelledby="link-title" hidden>
+    <div class="modal-box" tabindex="-1">
+      <div class="modal-title" id="link-title">Open External Link</div>
       <div class="modal-body">This will open the following URL in your default browser:</div>
       <div class="modal-body modal-url" id="link-modal-url"></div>
       <div class="modal-actions">
@@ -237,10 +225,24 @@
     </div>
   </div>
 
+  <!-- Discord invite confirmation modal -->
+  <div class="modal-overlay" id="discord-modal" role="dialog" aria-modal="true" aria-labelledby="discord-title" hidden>
+    <div class="modal-box" tabindex="-1">
+      <div class="modal-title" id="discord-title">Project Rx Discord</div>
+      <div class="modal-body">Join the Project Rx community in Discord.</div>
+      <div class="modal-body modal-url" id="discord-invite-url"></div>
+      <div class="modal-actions modal-actions--split">
+        <button class="modal-btn modal-btn-cancel" id="discord-cancel">Cancel</button>
+        <button class="modal-btn modal-btn-secondary" id="discord-copy">Copy Invite</button>
+        <button class="modal-btn modal-btn-confirm" id="discord-open">Open Discord</button>
+      </div>
+    </div>
+  </div>
+
   <!-- Repair confirmation modal -->
-  <div class="modal-overlay" id="repair-modal">
-    <div class="modal-box">
-      <div class="modal-title">Repair Patch</div>
+  <div class="modal-overlay" id="repair-modal" role="dialog" aria-modal="true" aria-labelledby="repair-title" hidden>
+    <div class="modal-box" tabindex="-1">
+      <div class="modal-title" id="repair-title">Repair Patch</div>
       <div class="modal-body">This will verify all patch files and re-download any that are missing or corrupted. Use this if you are experiencing issues with game data.</div>
       <div class="modal-body">Continue?</div>
       <div class="modal-actions">
@@ -251,8 +253,8 @@
   </div>
 
   <!-- Changelog modal -->
-  <div class="modal-overlay" id="changelog-modal">
-    <div class="modal-box modal-box--wide">
+  <div class="modal-overlay" id="changelog-modal" role="dialog" aria-modal="true" aria-labelledby="changelog-title" hidden>
+    <div class="modal-box modal-box--wide" tabindex="-1">
       <div class="modal-title" id="changelog-title">Changelog</div>
       <div class="changelog-content" id="changelog-content">
         <div class="news-placeholder">Loading...</div>
@@ -263,10 +265,10 @@
     </div>
   </div>
 
-  <!-- Update available modal -->
-  <div class="modal-overlay" id="update-modal">
-    <div class="modal-box">
-      <div class="modal-title">Update Available</div>
+  <!-- Patch update modal -->
+  <div class="modal-overlay" id="update-modal" role="dialog" aria-modal="true" aria-labelledby="update-title" hidden>
+    <div class="modal-box" tabindex="-1">
+      <div class="modal-title" id="update-title">Update Available</div>
       <div class="modal-body" id="update-modal-body">A new patch version is available. Would you like to download it?</div>
       <div class="modal-actions">
         <button class="modal-btn modal-btn-cancel" id="update-skip">Skip</button>
@@ -275,27 +277,20 @@
     </div>
   </div>
 
-  <!-- Launcher self-update modal -->
-  <div class="modal-overlay" id="launcher-update-modal">
-    <div class="modal-box">
-      <div class="modal-title">Launcher Update</div>
-      <div class="modal-body">A new launcher version (<strong id="launcher-update-version"></strong>) is available.</div>
-      <div class="modal-body" id="launcher-update-notes"></div>
-      <div class="modal-body hidden" id="launcher-update-dl">
-        <div id="launcher-update-status">Downloading update...</div>
-        <div class="patch-progress-track">
-          <div class="patch-progress-fill" id="launcher-update-fill"></div>
-        </div>
-      </div>
-      <div class="modal-actions" id="launcher-update-actions">
-        <button class="modal-btn modal-btn-cancel" id="launcher-update-later">Later</button>
-        <button class="modal-btn modal-btn-confirm" id="launcher-update-now">Update Now</button>
+  <!-- Launcher update confirmation modal -->
+  <div class="modal-overlay" id="launcher-update-modal" role="dialog" aria-modal="true" aria-labelledby="launcher-update-title" hidden>
+    <div class="modal-box" tabindex="-1">
+      <div class="modal-title" id="launcher-update-title">Launcher Update Available</div>
+      <div class="modal-body" id="launcher-update-modal-body">A new launcher version is available. Would you like to install it now?</div>
+      <div class="modal-actions">
+        <button class="modal-btn modal-btn-cancel" id="launcher-update-skip">Later</button>
+        <button class="modal-btn modal-btn-confirm" id="launcher-update-install">Install Update</button>
       </div>
     </div>
   </div>
 
   <!-- Toast container -->
-  <div class="toast-container" id="toast-container"></div>
+  <div class="toast-container" id="toast-container" role="status" aria-live="polite"></div>
 
 </body>
 </html>
