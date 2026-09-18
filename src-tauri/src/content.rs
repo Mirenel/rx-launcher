@@ -14,11 +14,11 @@ pub const CONTENT_MAX_FILE_BYTES: u64 = 512 * 1024 * 1024;
 pub const CONTENT_MAX_TOTAL_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 pub const CONTENT_MAX_PATCH_BYTES: u64 = 16 * 1024 * 1024;
 
-// The release build supplies this through RX_CONTENT_PUBLIC_KEY_B64. Debug
-// builds and unit tests may provide a key explicitly to validation methods.
+// The checked-in public key is safe to distribute with every launcher. The
+// environment override is useful for deliberate key rotation and tests.
 pub const CONTENT_PUBLIC_KEY_B64: &str = match option_env!("RX_CONTENT_PUBLIC_KEY_B64") {
-    Some(value) => value,
-    None => "",
+    Some(value) if !value.is_empty() => value,
+    _ => include_str!("../public-keys/content-public-key.b64"),
 };
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -219,7 +219,7 @@ impl ContentManifest {
         let signature = Signature::from_slice(&signature)
             .map_err(|_| "Project Rx content signature has an invalid length".to_string())?;
         let public_key = BASE64
-            .decode(public_key_b64)
+            .decode(public_key_b64.trim())
             .map_err(|_| "Embedded Project Rx content key is invalid".to_string())?;
         let public_key: [u8; 32] = public_key
             .try_into()

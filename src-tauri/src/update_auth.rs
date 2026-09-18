@@ -8,12 +8,11 @@ use crate::update_payload::signed_payload;
 pub const UPDATE_PLATFORM: &str = "windows";
 pub const UPDATE_ARCH: &str = "x86_64";
 
-// The release build supplies this value through RX_UPDATE_PUBLIC_KEY_B64. The
-// fallback permits ordinary debug builds and tests, but build-release.ps1
-// requires an explicit key and proves that it matches the signing key.
+// The checked-in public key is safe to distribute with every launcher. The
+// environment override is useful for deliberate key rotation and tests.
 pub const UPDATE_PUBLIC_KEY_B64: &str = match option_env!("RX_UPDATE_PUBLIC_KEY_B64") {
-    Some(value) => value,
-    None => "",
+    Some(value) if !value.is_empty() => value,
+    _ => include_str!("../public-keys/update-public-key.b64"),
 };
 
 pub fn ensure_newer(remote: &semver::Version, current: &semver::Version) -> Result<(), String> {
@@ -75,7 +74,7 @@ impl UpdateManifest {
         let signature = Signature::from_slice(&signature)
             .map_err(|_| "Launcher update signature has an invalid length".to_string())?;
         let public_key = BASE64
-            .decode(public_key_b64)
+            .decode(public_key_b64.trim())
             .map_err(|_| "Embedded update public key is invalid".to_string())?;
         let public_key: [u8; 32] = public_key
             .try_into()
