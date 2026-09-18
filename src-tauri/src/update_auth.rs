@@ -36,7 +36,7 @@ pub struct UpdateManifest {
     pub sha256: String,
     pub signature: String,
     #[serde(default)]
-    #[allow(dead_code)]
+    #[cfg_attr(not(windows), allow(dead_code))]
     pub notes: Option<String>,
 }
 
