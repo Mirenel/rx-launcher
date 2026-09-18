@@ -36,7 +36,7 @@ window.addEventListener("DOMContentLoaded", function () {
 
   // ── Settings (persisted via fs plugin to AppConfig) ─────
   var SETTINGS_FILE = 'settings.json';
-  var settings = { game_path: null, installed_patch_version: null, keep_open: false, minimize_to_tray: false, last_news_date: null };
+  var settings = { game_path: null, wine_prefix: null, installed_patch_version: null, keep_open: false, minimize_to_tray: false, last_news_date: null };
   var config = null;
   var settingsSaveQueue = Promise.resolve();
 
@@ -48,6 +48,7 @@ window.addEventListener("DOMContentLoaded", function () {
           if (parsed && typeof parsed === 'object') {
             // Only accept known keys with expected types
             if (typeof parsed.game_path === 'string') settings.game_path = parsed.game_path;
+            if (typeof parsed.wine_prefix === 'string' && parsed.wine_prefix.length > 0) settings.wine_prefix = parsed.wine_prefix;
             if (typeof parsed.installed_patch_version === 'string') settings.installed_patch_version = parsed.installed_patch_version;
             if (typeof parsed.keep_open === 'boolean') settings.keep_open = parsed.keep_open;
             if (typeof parsed.minimize_to_tray === 'boolean') settings.minimize_to_tray = parsed.minimize_to_tray;
@@ -168,6 +169,10 @@ window.addEventListener("DOMContentLoaded", function () {
   var patchProgressFill = document.getElementById('patch-progress-fill');
   var patchProgressText = document.getElementById('patch-progress-text');
   var gamePathInput = document.getElementById('game-path');
+  var winePrefixSetting = document.getElementById('wine-prefix-setting');
+  var winePrefixInput = document.getElementById('wine-prefix');
+  var winePrefixStatus = document.getElementById('wine-prefix-status');
+  var winePrefixClear = document.getElementById('wine-prefix-clear');
   var playBtn = document.getElementById('play-btn');
   var playBtnText = playBtn.querySelector('.play-btn-text');
   var patchBtn = document.getElementById('patch-btn');
@@ -235,6 +240,7 @@ window.addEventListener("DOMContentLoaded", function () {
   var hasGamePath = false;
   var runtimeReady = false;
   var runtimeChecking = false;
+  var runtimeRecheckPending = false;
   var patchInstalled = false;
   var patchOutdated = false;
   var patchManifestReady = false;
@@ -450,7 +456,10 @@ window.addEventListener("DOMContentLoaded", function () {
   }
 
   function checkGameRuntime() {
-    if (runtimeChecking) return Promise.resolve(runtimeReady);
+    if (runtimeChecking) {
+      runtimeRecheckPending = true;
+      return Promise.resolve(runtimeReady);
+    }
     runtimeChecking = true;
     runtimeWarnRetry.disabled = true;
     runtimeWarnText.textContent = 'Checking the game runtime...';
@@ -458,7 +467,8 @@ window.addEventListener("DOMContentLoaded", function () {
     runtimeReady = false;
     updatePlayButtonState();
 
-    return invoke('check_game_runtime', null, 10000).then(function (status) {
+    return invoke('check_game_runtime', { winePrefix: settings.wine_prefix || null }, 10000).then(function (status) {
+      updateWinePrefixVisibility(status);
       runtimeReady = !!status && status.ready === true;
       if (runtimeReady) {
         runtimeWarnBanner.classList.add('hidden');
@@ -479,6 +489,10 @@ window.addEventListener("DOMContentLoaded", function () {
     }).then(function (ready) {
       runtimeChecking = false;
       runtimeWarnRetry.disabled = false;
+      if (runtimeRecheckPending) {
+        runtimeRecheckPending = false;
+        checkGameRuntime();
+      }
       return ready;
     });
   }
@@ -487,7 +501,18 @@ window.addEventListener("DOMContentLoaded", function () {
     checkGameRuntime();
   });
 
-  checkGameRuntime();
+  function updateWinePrefixDisplay() {
+    var selected = typeof settings.wine_prefix === 'string' && settings.wine_prefix.length > 0;
+    winePrefixInput.value = selected ? settings.wine_prefix : '';
+    winePrefixStatus.textContent = selected
+      ? 'Custom prefix selected'
+      : 'Inherited WINEPREFIX or ~/.wine';
+    winePrefixClear.disabled = !selected;
+  }
+
+  function updateWinePrefixVisibility(status) {
+    winePrefixSetting.classList.toggle('hidden', !status || status.runtime !== 'wine');
+  }
 
   function updatePatchDisplay() {
     if (!config) return;
@@ -761,6 +786,30 @@ window.addEventListener("DOMContentLoaded", function () {
     }).catch(function () { showToast('Could not open folder picker'); });
   });
 
+  document.getElementById('wine-prefix-browse').addEventListener('click', function () {
+    tauriDialog.open({
+      multiple: false,
+      directory: true,
+      title: 'Select Wine Prefix'
+    }).then(function (path) {
+      if (path) {
+        settings.wine_prefix = path;
+        updateWinePrefixDisplay();
+        saveSettingsWithFeedback('Wine prefix saved').then(function () {
+          return checkGameRuntime();
+        }).catch(function () {});
+      }
+    }).catch(function () { showToast('Could not open folder picker'); });
+  });
+
+  winePrefixClear.addEventListener('click', function () {
+    settings.wine_prefix = null;
+    updateWinePrefixDisplay();
+    saveSettingsWithFeedback('Using the default Wine prefix').then(function () {
+      return checkGameRuntime();
+    }).catch(function () {});
+  });
+
   // ── Setup / path warning banners ───────────────────────
   document.getElementById('setup-banner-btn').addEventListener('click', function () {
     document.getElementById('browse-btn').click();
@@ -912,7 +961,10 @@ window.addEventListener("DOMContentLoaded", function () {
   });
 
   function doLaunch() {
-    invoke('launch_game', { gamePath: settings.game_path }).then(function () {
+    invoke('launch_game', {
+      gamePath: settings.game_path,
+      winePrefix: settings.wine_prefix || null
+    }).then(function () {
       if (!settings.keep_open) {
         tauriProcess.exit(0);
       } else if (settings.minimize_to_tray) {
@@ -1224,7 +1276,9 @@ window.addEventListener("DOMContentLoaded", function () {
     keepOpenCb.checked = settings.keep_open;
     minimizeTrayCb.checked = settings.minimize_to_tray;
     minimizeTrayCb.disabled = !settings.keep_open;
+    updateWinePrefixDisplay();
     updatePatchDisplay();
+    checkGameRuntime();
 
     // Content metadata is independently authenticated and may be hosted by
     // either configured Project Rx source. It must not prevent the launcher

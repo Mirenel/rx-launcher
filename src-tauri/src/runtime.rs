@@ -21,9 +21,10 @@ pub fn unavailable_status(message: impl Into<String>) -> GameRuntimeStatus {
     }
 }
 
-pub fn status() -> GameRuntimeStatus {
+pub fn status(wine_prefix: Option<&str>) -> GameRuntimeStatus {
     #[cfg(windows)]
     {
+        let _ = wine_prefix;
         return GameRuntimeStatus {
             runtime: "native".into(),
             ready: true,
@@ -34,16 +35,30 @@ pub fn status() -> GameRuntimeStatus {
 
     #[cfg(target_os = "linux")]
     {
-        return linux_status();
+        return linux_status(wine_prefix);
     }
 
     #[cfg(not(any(windows, target_os = "linux")))]
-    unavailable_status("Project Rx game launch is supported on Windows and Linux only")
+    {
+        let _ = wine_prefix;
+        unavailable_status("Project Rx game launch is supported on Windows and Linux only")
+    }
 }
 
 #[cfg(target_os = "linux")]
-fn linux_status() -> GameRuntimeStatus {
-    let output = match Command::new("wine").arg("--version").output() {
+fn linux_status(wine_prefix: Option<&str>) -> GameRuntimeStatus {
+    let mut command = match wine_command(wine_prefix) {
+        Ok(command) => command,
+        Err(message) => {
+            return GameRuntimeStatus {
+                runtime: "wine".into(),
+                ready: false,
+                version: None,
+                message,
+            };
+        }
+    };
+    let output = match command.arg("--version").output() {
         Ok(output) => output,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
             return GameRuntimeStatus {
@@ -64,6 +79,23 @@ fn linux_status() -> GameRuntimeStatus {
     };
 
     classify_wine_probe(output.status.success(), &output.stdout, &output.stderr)
+}
+
+#[cfg(target_os = "linux")]
+fn wine_command(wine_prefix: Option<&str>) -> Result<Command, String> {
+    let mut command = Command::new("wine");
+    let Some(wine_prefix) = wine_prefix.filter(|value| !value.is_empty()) else {
+        return Ok(command);
+    };
+    let path = Path::new(wine_prefix);
+    if !path.is_absolute() {
+        return Err("Wine prefix must be an absolute directory".into());
+    }
+    if !path.is_dir() {
+        return Err("Wine prefix directory not found".into());
+    }
+    command.env("WINEPREFIX", path);
+    Ok(command)
 }
 
 #[cfg(target_os = "linux")]
@@ -120,9 +152,10 @@ fn first_line(bytes: &[u8]) -> Option<String> {
         .map(|line| line.chars().take(128).collect())
 }
 
-pub fn launch(game_exe: &Path, game_dir: &Path) -> Result<(), String> {
+pub fn launch(game_exe: &Path, game_dir: &Path, wine_prefix: Option<&str>) -> Result<(), String> {
     #[cfg(windows)]
     {
+        let _ = wine_prefix;
         return Command::new(game_exe)
             .current_dir(game_dir)
             .spawn()
@@ -132,12 +165,13 @@ pub fn launch(game_exe: &Path, game_dir: &Path) -> Result<(), String> {
 
     #[cfg(target_os = "linux")]
     {
-        let runtime = linux_status();
+        let runtime = linux_status(wine_prefix);
         if !runtime.ready {
             return Err(runtime.message);
         }
 
-        return Command::new("wine")
+        let mut command = wine_command(wine_prefix)?;
+        return command
             .arg(game_exe)
             .current_dir(game_dir)
             .spawn()
@@ -153,7 +187,7 @@ pub fn launch(game_exe: &Path, game_dir: &Path) -> Result<(), String> {
 
     #[cfg(not(any(windows, target_os = "linux")))]
     {
-        let _ = (game_exe, game_dir);
+        let _ = (game_exe, game_dir, wine_prefix);
         Err("Project Rx game launch is supported on Windows and Linux only".into())
     }
 }
@@ -185,5 +219,12 @@ mod tests {
         let status = classify_wine_probe(false, b"", b"Wine failed\n");
         assert!(!status.ready);
         assert!(status.message.contains("could not verify"));
+    }
+
+    #[test]
+    fn missing_wine_prefix_blocks_runtime() {
+        let status = linux_status(Some("/definitely/missing/project-rx-wine-prefix"));
+        assert!(!status.ready);
+        assert!(status.message.contains("Wine prefix directory not found"));
     }
 }

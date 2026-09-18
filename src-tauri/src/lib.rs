@@ -119,8 +119,8 @@ struct GameDirectoryStatus {
 }
 
 #[tauri::command]
-async fn check_game_runtime() -> runtime::GameRuntimeStatus {
-    tauri::async_runtime::spawn_blocking(runtime::status)
+async fn check_game_runtime(wine_prefix: Option<String>) -> runtime::GameRuntimeStatus {
+    tauri::async_runtime::spawn_blocking(move || runtime::status(wine_prefix.as_deref()))
         .await
         .unwrap_or_else(|_| runtime::unavailable_status("Could not check the game runtime"))
 }
@@ -383,7 +383,7 @@ async fn get_changelog(http: tauri::State<'_, HttpClient>) -> Result<Vec<Changel
 // ── Game launch (via shell plugin) ──────────────────────────
 
 #[tauri::command]
-fn launch_game(game_path: String) -> Result<(), String> {
+fn launch_game(game_path: String, wine_prefix: Option<String>) -> Result<(), String> {
     let dir = validate_game_path(&game_path)?;
     let wow_exe = dir.join("rx-wow.exe");
 
@@ -391,7 +391,7 @@ fn launch_game(game_path: String) -> Result<(), String> {
         return Err("rx-wow.exe not found. Patch the game before launching.".into());
     }
 
-    runtime::launch(&wow_exe, &dir)
+    runtime::launch(&wow_exe, &dir, wine_prefix.as_deref())
 }
 
 // ── Patch download ──────────────────────────────────────────

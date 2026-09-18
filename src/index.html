@@ -141,7 +141,7 @@
       <section class="tab-panel" id="tab-settings" role="tabpanel" tabindex="0" hidden>
         <div class="content-header">
           <h2 class="content-title">Settings</h2>
-          <p class="content-subtitle">Game location and launcher behavior</p>
+          <p class="content-subtitle">Game location, Wine, and launcher behavior</p>
         </div>
         <div class="settings-grid">
           <div class="setting-row">
@@ -166,6 +166,21 @@
             <div class="setting-control">
               <input type="text" class="setting-input" value="set realmlist projectrx.net" readonly>
               <button class="setting-btn" id="patch-btn" disabled>Set</button>
+            </div>
+          </div>
+          <div class="setting-row hidden" id="wine-prefix-setting">
+            <div class="setting-label-row">
+              <div class="setting-label-help">
+                <label class="setting-label" for="wine-prefix">Wine Prefix</label>
+                <button class="path-help" type="button" aria-label="Show Wine prefix help" aria-describedby="wine-prefix-help-tooltip">?</button>
+                <span class="path-help-tooltip" id="wine-prefix-help-tooltip" role="tooltip">Choose the Wine prefix that contains this WoW installation's settings. Leave it empty to use the inherited <code>WINEPREFIX</code> or Wine's default <code>~/.wine</code>.</span>
+              </div>
+              <span class="setting-value" id="wine-prefix-status">Inherited WINEPREFIX or ~/.wine</span>
+            </div>
+            <div class="setting-control">
+              <input type="text" id="wine-prefix" class="setting-input" readonly placeholder="Use WINEPREFIX or ~/.wine">
+              <button class="setting-btn" id="wine-prefix-browse">Browse</button>
+              <button class="setting-btn" id="wine-prefix-clear">Clear</button>
             </div>
           </div>
           <div class="setting-row">
