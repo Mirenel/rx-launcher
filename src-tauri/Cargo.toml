@@ -37,6 +37,10 @@ tauri-plugin-single-instance = "=2.4.4"
 [target.'cfg(target_os = "linux")'.dependencies]
 # Keep the official single-instance plugin compatible with the project's Rust 1.85 MSRV.
 zbus = "=5.13.0"
+# GUI applications do not necessarily inherit the user's shell PATH. Pin the
+# helper revision so Wine installed outside the system PATH remains discoverable
+# without adding a launcher-specific Wine executable setting.
+fix-path-env = { git = "https://github.com/tauri-apps/fix-path-env-rs.git", rev = "c4c45d503ea115a839aae718d02f79e7c7f0f673" }
 
 [target.'cfg(windows)'.dependencies]
 window-vibrancy = "0.5"
