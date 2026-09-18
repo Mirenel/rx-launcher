@@ -1768,6 +1768,12 @@ pub fn run() {
     builder
         .manage(HttpClient(http_client))
         .setup(|app| {
+            // Create the app config directory before the frontend uses the
+            // scoped filesystem plugin. The plugin cannot authorize a
+            // nonexistent base directory for the first settings write.
+            let app_config_dir = app.path().app_config_dir()?;
+            fs::create_dir_all(&app_config_dir)?;
+
             #[cfg(windows)]
             let window = app.get_webview_window("main").unwrap();
 
