@@ -1,3 +1,4 @@
+// Build tooling is kept outside src/bin so Tauri does not bundle it.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 // This helper is only executed by Windows launcher builds. Keep the source
 // available to Cargo on Linux for workspace checks without dead-code noise.

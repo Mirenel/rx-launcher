@@ -1,3 +1,4 @@
+// Build tooling is kept outside src/bin so Tauri does not bundle it.
 use rx_launcher_lib::exe_patch::{apply_patch_bytes, build_patch, parse_patch};
 use sha2::{Digest, Sha256};
 use std::env;

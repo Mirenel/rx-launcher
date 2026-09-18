@@ -7,9 +7,33 @@ edition = "2021"
 rust-version = "1.85"
 default-run = "rx-launcher"
 
+[features]
+default = []
+release-tools = []
+
 [lib]
 name = "rx_launcher_lib"
 crate-type = ["cdylib", "rlib"]
+
+[[bin]]
+name = "rx-content-signer"
+path = "src/tools/rx-content-signer.rs"
+required-features = ["release-tools"]
+
+[[bin]]
+name = "rx-patch-builder"
+path = "src/tools/rx-patch-builder.rs"
+required-features = ["release-tools"]
+
+[[bin]]
+name = "rx-release-signer"
+path = "src/tools/rx-release-signer.rs"
+required-features = ["release-tools"]
+
+[[bin]]
+name = "rx-updater"
+path = "src/tools/rx-updater.rs"
+required-features = ["release-tools"]
 
 [dependencies]
 tauri = { version = "2", features = ["tray-icon"] }
