@@ -500,7 +500,7 @@ fn log_update(message: &str) {
 
 fn update_root_dir() -> PathBuf {
     std::env::temp_dir()
-        .join("Project Rx Launcher")
+        .join("Project.Rx.Launcher")
         .join("updates")
 }
 
