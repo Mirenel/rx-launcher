@@ -965,14 +965,23 @@ window.addEventListener("DOMContentLoaded", function () {
   });
 
   function doLaunch() {
-    invoke('launch_game', {
-      gamePath: settings.game_path,
-      winePrefix: settings.wine_prefix || null
+    // Finish any queued checkbox/settings write before exiting or hiding the
+    // launcher. Otherwise the process can terminate before the new choice is
+    // persisted.
+    saveSettings().catch(function () {}).then(function () {
+      return invoke('launch_game', {
+        gamePath: settings.game_path,
+        winePrefix: settings.wine_prefix || null
+      });
     }).then(function () {
       if (!settings.keep_open) {
-        tauriProcess.exit(0);
+        tauriProcess.exit(0).catch(function () {
+          showToast('Could not close the launcher');
+        });
       } else if (settings.minimize_to_tray) {
-        appWindow.hide();
+        appWindow.hide().catch(function () {
+          showToast('Could not hide the launcher to the system tray');
+        });
       } else {
         showToast('Game launched');
       }
@@ -1278,6 +1287,7 @@ window.addEventListener("DOMContentLoaded", function () {
     }
 
     keepOpenCb.checked = settings.keep_open;
+    if (!settings.keep_open) settings.minimize_to_tray = false;
     minimizeTrayCb.checked = settings.minimize_to_tray;
     minimizeTrayCb.disabled = !settings.keep_open;
     updateWinePrefixDisplay();
