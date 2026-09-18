@@ -154,10 +154,6 @@ impl ContentManifest {
         payload
     }
 
-    pub fn validate(&self) -> Result<(), String> {
-        self.validate_with_key(CONTENT_PUBLIC_KEY_B64)
-    }
-
     pub fn validate_with_key(&self, public_key_b64: &str) -> Result<(), String> {
         if self.schema != 1 {
             return Err("Project Rx content manifest has an unsupported schema".into());

@@ -16,7 +16,9 @@ pub mod content;
 pub mod exe_patch;
 mod runtime;
 mod update;
+#[cfg(any(windows, test))]
 mod update_auth;
+#[cfg(any(windows, test))]
 mod update_payload;
 
 const REALMLIST_VALUE: &str = "set realmlist projectrx.net";

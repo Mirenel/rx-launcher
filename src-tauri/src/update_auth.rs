@@ -10,6 +10,7 @@ pub const UPDATE_ARCH: &str = "x86_64";
 
 // The checked-in public key is safe to distribute with every launcher. The
 // environment override is useful for deliberate key rotation and tests.
+#[cfg(windows)]
 pub const UPDATE_PUBLIC_KEY_B64: &str = match option_env!("RX_UPDATE_PUBLIC_KEY_B64") {
     Some(value) if !value.is_empty() => value,
     _ => include_str!("../public-keys/update-public-key.b64"),
@@ -51,6 +52,7 @@ impl UpdateManifest {
         )
     }
 
+    #[cfg(windows)]
     pub fn validate(&self) -> Result<semver::Version, String> {
         self.validate_with_key(UPDATE_PUBLIC_KEY_B64)
     }

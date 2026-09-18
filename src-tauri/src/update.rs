@@ -1,38 +1,42 @@
 // The signed self-updater is Windows-only; Linux keeps the public no-updater
 // behavior until a signed Linux artifact and updater are available.
-#![cfg_attr(not(windows), allow(dead_code, unused_imports, unused_variables))]
-
+#[cfg(windows)]
 use futures_util::StreamExt;
 use serde::Serialize;
+#[cfg(any(windows, test))]
 use sha2::{Digest, Sha256};
 use std::fs::{self, OpenOptions};
-use std::io::{Read, Write};
-use std::path::{Path, PathBuf};
+#[cfg(any(windows, test))]
+use std::io::Read;
+use std::io::Write;
+#[cfg(any(windows, test))]
+use std::path::Path;
+use std::path::PathBuf;
+#[cfg(windows)]
 use std::process::Command;
-use std::time::{Duration, SystemTime};
+#[cfg(windows)]
+use std::time::Duration;
+use std::time::SystemTime;
+#[cfg(windows)]
 use tokio::io::AsyncWriteExt;
 
+#[cfg(windows)]
 use crate::update_auth::{ensure_newer, UpdateManifest};
 
+#[cfg(windows)]
 include!(concat!(env!("OUT_DIR"), "/embedded_updater.rs"));
+#[cfg(windows)]
 static UPDATER_EXE: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/rx-updater.exe"));
 
+#[cfg(windows)]
 const UPDATE_MANIFEST_URL: &str =
     "https://github.com/Mirenel/rx-launcher/releases/latest/download/latest.json";
+#[cfg(windows)]
 const UPDATE_MAX_BYTES: u64 = 512 * 1024 * 1024;
+#[cfg(windows)]
 const MANIFEST_TIMEOUT: Duration = Duration::from_secs(30);
+#[cfg(windows)]
 const DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(15 * 60);
-
-#[allow(dead_code)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum UpdateState {
-    Idle,
-    Checking,
-    Downloading,
-    Ready,
-    Applying,
-    Failed,
-}
 
 #[derive(Debug, Clone, Serialize)]
 pub struct UpdateNotice {
@@ -148,12 +152,8 @@ async fn check_for_update_and_apply_inner(app: tauri::AppHandle) -> Result<(), S
     log_update("release signature reverified before starting the helper");
 
     let pid = std::process::id();
-    #[cfg(windows)]
     let ready_event = ReadyEvent::create(pid)?;
-    #[cfg(windows)]
     let ready_event_name = ready_event.name.clone();
-    #[cfg(not(windows))]
-    let ready_event_name = String::new();
     let mut command = Command::new(&helper);
     command
         .arg("apply")
@@ -182,7 +182,6 @@ async fn check_for_update_and_apply_inner(app: tauri::AppHandle) -> Result<(), S
         .arg("--current-version")
         .arg(app.package_info().version.to_string())
         .current_dir(&update_dir);
-    #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
         command.creation_flags(0x08000000);
@@ -190,13 +189,11 @@ async fn check_for_update_and_apply_inner(app: tauri::AppHandle) -> Result<(), S
     let mut child = command
         .spawn()
         .map_err(|_| "Could not start the embedded launcher updater".to_string())?;
-    #[cfg(windows)]
     if let Err(error) = ready_event.wait() {
         let _ = child.kill();
         return Err(error);
     }
     log_update("embedded helper started; launcher exiting for replacement");
-    #[cfg(windows)]
     log_update("helper validated the launcher process image; exiting for replacement");
     app.exit(0);
     Ok(())
@@ -248,6 +245,7 @@ impl Drop for ReadyEvent {
     }
 }
 
+#[cfg(windows)]
 fn update_client() -> Result<reqwest::Client, String> {
     reqwest::Client::builder()
         .connect_timeout(Duration::from_secs(15))
@@ -262,6 +260,7 @@ fn update_client() -> Result<reqwest::Client, String> {
         .map_err(|_| "Could not configure the launcher update client".to_string())
 }
 
+#[cfg(windows)]
 async fn fetch_manifest(
     app: &tauri::AppHandle,
     client: &reqwest::Client,
@@ -294,6 +293,7 @@ async fn fetch_manifest(
     Ok((manifest, remote_version, current_version))
 }
 
+#[cfg(windows)]
 async fn read_capped_body(
     response: reqwest::Response,
     max_bytes: usize,
@@ -316,6 +316,7 @@ async fn read_capped_body(
     Ok(bytes)
 }
 
+#[cfg(windows)]
 async fn download_update(
     client: &reqwest::Client,
     manifest: &UpdateManifest,
@@ -372,6 +373,7 @@ async fn download_update(
     Ok(())
 }
 
+#[cfg(windows)]
 fn is_allowed_github_url(url: &url::Url) -> bool {
     url.scheme() == "https"
         && url.username().is_empty()
@@ -385,6 +387,7 @@ fn is_allowed_github_url(url: &url::Url) -> bool {
         )
 }
 
+#[cfg(any(windows, test))]
 fn verify_file_hash(path: &Path, expected: &str) -> Result<(), String> {
     let mut file =
         fs::File::open(path).map_err(|_| "Could not open a staged update file".to_string())?;
@@ -410,6 +413,7 @@ fn verify_file_hash(path: &Path, expected: &str) -> Result<(), String> {
     Ok(())
 }
 
+#[cfg(windows)]
 fn create_update_dir() -> Result<PathBuf, String> {
     let root = update_root_dir();
     fs::create_dir_all(&root)
@@ -420,6 +424,7 @@ fn create_update_dir() -> Result<PathBuf, String> {
     Ok(path)
 }
 
+#[cfg(windows)]
 fn extract_embedded_helper(update_dir: &Path) -> Result<PathBuf, String> {
     if UPDATER_EXE.is_empty() {
         return Err("This build does not contain an embedded updater".into());
@@ -437,6 +442,7 @@ fn extract_embedded_helper(update_dir: &Path) -> Result<PathBuf, String> {
     Ok(helper)
 }
 
+#[cfg(windows)]
 fn ensure_target_writable(target: &Path) -> Result<(), String> {
     let parent = target
         .parent()
@@ -454,6 +460,7 @@ fn ensure_target_writable(target: &Path) -> Result<(), String> {
     }
 }
 
+#[cfg(any(windows, test))]
 fn unique_suffix() -> u128 {
     SystemTime::now()
         .duration_since(SystemTime::UNIX_EPOCH)
@@ -461,6 +468,7 @@ fn unique_suffix() -> u128 {
         .as_nanos()
 }
 
+#[cfg(windows)]
 fn cleanup_stale_update_dirs() {
     let root = update_root_dir();
     let Ok(entries) = fs::read_dir(&root) else {
@@ -513,12 +521,6 @@ fn chrono_like_timestamp() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn update_state_has_transaction_phases() {
-        assert_ne!(UpdateState::Downloading, UpdateState::Applying);
-        assert_eq!(UpdateState::Idle, UpdateState::Idle);
-    }
 
     #[cfg(not(windows))]
     #[test]
