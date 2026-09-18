@@ -1338,6 +1338,23 @@ body {
   color: var(--red);
 }
 
+/* ── Game runtime warning banner ────────────────────────── */
+.runtime-warn-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 16px;
+  margin-bottom: 12px;
+  background: rgba(224, 96, 96, 0.1);
+  border: 1px solid rgba(224, 96, 96, 0.4);
+  border-radius: 6px;
+  box-shadow: 0 0 8px rgba(224, 96, 96, 0.1);
+  font-family: 'Crimson Text', serif;
+  font-size: 14px;
+  color: var(--red);
+}
+
 /* ── Launcher update banner ────────────────────────────── */
 .launcher-update-banner {
   display: flex;
@@ -1440,6 +1457,7 @@ body {
 .setting-row,
 .setup-banner,
 .path-warn-banner,
+.runtime-warn-banner,
 .launcher-update-banner,
 .modal-box {
   background: linear-gradient(100deg, rgba(31, 29, 25, .96), rgba(16, 21, 27, .96));
@@ -1615,6 +1633,7 @@ body {
 .setting-row,
 .setup-banner,
 .path-warn-banner,
+.runtime-warn-banner,
 .launcher-update-banner,
 .modal-box {
   background: linear-gradient(100deg, rgba(31, 29, 25, .91), rgba(16, 21, 27, .91));

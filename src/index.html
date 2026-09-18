@@ -72,6 +72,10 @@
         <span class="path-help-tooltip path-help-tooltip--banner" id="path-help-banner-tooltip" role="tooltip">Choose the standard WoW root folder: it must contain <code>Wow.exe</code>, with <code>Data</code> beside it. Do not choose the <code>Data</code> or <code>Interface</code> subfolder.</span>
         <button class="banner__btn" id="path-warn-btn">Update Path</button>
       </div>
+      <div class="runtime-warn-banner hidden" id="runtime-warn-banner" role="status" aria-live="polite">
+        <span id="runtime-warn-text">The game runtime is unavailable.</span>
+        <button class="banner__btn" id="runtime-warn-retry">Retry</button>
+      </div>
       <div class="launcher-update-banner hidden" id="launcher-update-banner" role="status" aria-live="polite">
         <span id="launcher-update-banner-body">A launcher update is available.</span>
         <button class="banner__btn" id="launcher-update-banner-btn">Install Update</button>

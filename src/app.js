@@ -224,12 +224,17 @@ window.addEventListener("DOMContentLoaded", function () {
   var setupBanner = document.getElementById('setup-banner');
   var pathWarnBanner = document.getElementById('path-warn-banner');
   var pathWarnText = document.getElementById('path-warn-text');
+  var runtimeWarnBanner = document.getElementById('runtime-warn-banner');
+  var runtimeWarnText = document.getElementById('runtime-warn-text');
+  var runtimeWarnRetry = document.getElementById('runtime-warn-retry');
 
   var pendingLinkUrl = null;
   // Keep the community action usable without a remote launcher manifest.
   var discordInviteUrl = 'https://discord.gg/VTWnWbqJYE';
   var pendingLaunchAction = null;
   var hasGamePath = false;
+  var runtimeReady = false;
+  var runtimeChecking = false;
   var patchInstalled = false;
   var patchOutdated = false;
   var patchManifestReady = false;
@@ -433,12 +438,56 @@ window.addEventListener("DOMContentLoaded", function () {
 
   function setGamePathValid(valid) {
     hasGamePath = !!valid;
-    playBtn.disabled = !hasGamePath || downloading;
+    updatePlayButtonState();
     patchBtn.disabled = !hasGamePath;
     patchNoPath.classList.toggle('hidden', hasGamePath);
     if (downloadBtn && (!patchInstalled || patchOutdated)) downloadBtn.disabled = !patchManifestReady || !hasGamePath || downloading;
     updatePatchDisplay();
   }
+
+  function updatePlayButtonState() {
+    playBtn.disabled = !hasGamePath || !runtimeReady || downloading;
+  }
+
+  function checkGameRuntime() {
+    if (runtimeChecking) return Promise.resolve(runtimeReady);
+    runtimeChecking = true;
+    runtimeWarnRetry.disabled = true;
+    runtimeWarnText.textContent = 'Checking the game runtime...';
+    runtimeWarnBanner.classList.add('hidden');
+    runtimeReady = false;
+    updatePlayButtonState();
+
+    return invoke('check_game_runtime', null, 10000).then(function (status) {
+      runtimeReady = !!status && status.ready === true;
+      if (runtimeReady) {
+        runtimeWarnBanner.classList.add('hidden');
+      } else {
+        runtimeWarnText.textContent = status && status.message
+          ? status.message
+          : 'The game runtime is unavailable. Install Wine with 32-bit support and try again.';
+        runtimeWarnBanner.classList.remove('hidden');
+      }
+      updatePlayButtonState();
+      return runtimeReady;
+    }).catch(function () {
+      runtimeReady = false;
+      runtimeWarnText.textContent = 'Could not check the game runtime. Install Wine with 32-bit support and try again.';
+      runtimeWarnBanner.classList.remove('hidden');
+      updatePlayButtonState();
+      return false;
+    }).then(function (ready) {
+      runtimeChecking = false;
+      runtimeWarnRetry.disabled = false;
+      return ready;
+    });
+  }
+
+  runtimeWarnRetry.addEventListener('click', function () {
+    checkGameRuntime();
+  });
+
+  checkGameRuntime();
 
   function updatePatchDisplay() {
     if (!config) return;
@@ -635,8 +684,8 @@ window.addEventListener("DOMContentLoaded", function () {
       setProgress(100);
       patchLogLine(label + ' complete!', 'log-ok');
       repairBtn.disabled = false;
-      playBtn.disabled = false;
       downloading = false;
+      updatePlayButtonState();
       updatePatchDisplay();
       checkGameDirectory();
       // Auto-set realmlist only if not found (don't overwrite user's custom realmlist)
@@ -660,8 +709,8 @@ window.addEventListener("DOMContentLoaded", function () {
       patchLogLine(msg, 'log-warn');
       downloadBtn.disabled = false;
       repairBtn.disabled = false;
-      playBtn.disabled = false;
       downloading = false;
+      updatePlayButtonState();
       updatePatchDisplay();
       checkGameDirectory();
       if (unlisten) unlisten();
@@ -875,7 +924,9 @@ window.addEventListener("DOMContentLoaded", function () {
       modalWarnTitle.textContent = 'Launch Failed';
       modalWarnBody.textContent = String(e).indexOf('rx-wow.exe not found') !== -1
         ? 'rx-wow.exe is not installed in the selected game directory. Use Patch or Repair to install it first.'
-        : String(e).indexOf('Wine is required') !== -1
+        : String(e).indexOf('32-bit Wine') !== -1
+        ? 'Wine is installed but 32-bit support is unavailable. Install Wine support for 32-bit Windows applications and try again.'
+        : String(e).indexOf('Wine') !== -1
         ? 'Wine is required to launch the Windows game client on Linux. Install Wine and try again.'
         : 'Could not start rx-wow.exe. Make sure the game directory is accessible and try again.';
       modalWarnQuestion.classList.add('hidden');
@@ -1089,6 +1140,10 @@ window.addEventListener("DOMContentLoaded", function () {
 
   // ── Play button ─────────────────────────────────────────
   function continuePlayFlow() {
+    if (!runtimeReady) {
+      runtimeWarnBanner.classList.remove('hidden');
+      return;
+    }
     if (!patchInstalled) {
       modalWarnTitle.textContent = 'Patch Not Installed';
       modalWarnBody.textContent = 'The Project Rx patch is not installed. You may experience issues without it.';
@@ -1109,7 +1164,7 @@ window.addEventListener("DOMContentLoaded", function () {
     playBtn.disabled = true;
     playBtnText.textContent = 'Verifying...';
     invoke('verify_patch', { gamePath: settings.game_path }, 30000).then(function (bad) {
-      playBtn.disabled = false;
+      updatePlayButtonState();
       playBtnText.textContent = 'Play';
       if (bad.length > 0) {
         modalWarnTitle.textContent = 'Integrity Check Failed';
@@ -1124,7 +1179,7 @@ window.addEventListener("DOMContentLoaded", function () {
         launchGame();
       }
     }).catch(function (e) {
-      playBtn.disabled = false;
+      updatePlayButtonState();
       playBtnText.textContent = 'Play';
       modalWarnTitle.textContent = 'Verification Unavailable';
       modalWarnBody.textContent = 'The launcher could not verify the patch: ' + String(e || 'unknown error') + '. You can use Repair, or explicitly continue at your own risk.';

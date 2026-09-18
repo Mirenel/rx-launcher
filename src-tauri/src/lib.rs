@@ -6,7 +6,6 @@ use std::io::{BufReader, Read, Write};
 use std::net::TcpStream;
 use std::net::ToSocketAddrs;
 use std::path::{Component, Path, PathBuf};
-use std::process::Command;
 use std::time::Duration;
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
@@ -15,6 +14,7 @@ use tauri::Manager;
 
 pub mod content;
 pub mod exe_patch;
+mod runtime;
 mod update;
 mod update_auth;
 mod update_payload;
@@ -37,44 +37,6 @@ const LEGACY_PATCH_PATHS: &[&str] = &[
 ];
 
 struct HttpClient(reqwest::Client);
-
-#[cfg(windows)]
-struct AppInstanceMutex(windows_sys::Win32::Foundation::HANDLE);
-
-#[cfg(windows)]
-unsafe impl Send for AppInstanceMutex {}
-#[cfg(windows)]
-unsafe impl Sync for AppInstanceMutex {}
-
-#[cfg(windows)]
-impl AppInstanceMutex {
-    fn acquire() -> Result<Option<Self>, String> {
-        use std::os::windows::ffi::OsStrExt;
-        use windows_sys::Win32::Foundation::{CloseHandle, GetLastError, ERROR_ALREADY_EXISTS};
-        use windows_sys::Win32::System::Threading::CreateMutexW;
-
-        let name = std::ffi::OsStr::new("Local\\ProjectRxLauncher.Instance")
-            .encode_wide()
-            .chain(std::iter::once(0))
-            .collect::<Vec<_>>();
-        let handle = unsafe { CreateMutexW(std::ptr::null(), 0, name.as_ptr()) };
-        if handle.is_null() {
-            return Err("Could not create the launcher instance mutex".into());
-        }
-        if unsafe { GetLastError() } == ERROR_ALREADY_EXISTS {
-            unsafe { CloseHandle(handle) };
-            return Ok(None);
-        }
-        Ok(Some(Self(handle)))
-    }
-}
-
-#[cfg(windows)]
-impl Drop for AppInstanceMutex {
-    fn drop(&mut self) {
-        unsafe { windows_sys::Win32::Foundation::CloseHandle(self.0) };
-    }
-}
 
 // ── Input validation ────────────────────────────────────────
 
@@ -154,6 +116,13 @@ struct GameDirectoryStatus {
     has_data: bool,
     has_addons: bool,
     has_rx_wow: bool,
+}
+
+#[tauri::command]
+async fn check_game_runtime() -> runtime::GameRuntimeStatus {
+    tauri::async_runtime::spawn_blocking(runtime::status)
+        .await
+        .unwrap_or_else(|_| runtime::unavailable_status("Could not check the game runtime"))
 }
 
 #[tauri::command]
@@ -422,24 +391,7 @@ fn launch_game(game_path: String) -> Result<(), String> {
         return Err("rx-wow.exe not found. Patch the game before launching.".into());
     }
 
-    #[cfg(windows)]
-    let spawn_result = Command::new(&wow_exe).current_dir(&dir).spawn();
-
-    #[cfg(target_os = "linux")]
-    let spawn_result = Command::new("wine").arg(&wow_exe).current_dir(&dir).spawn();
-
-    #[cfg(not(any(windows, target_os = "linux")))]
-    return Err("Project Rx game launch is supported on Windows and Linux only".into());
-
-    spawn_result.map_err(|error| {
-        #[cfg(target_os = "linux")]
-        if error.kind() == std::io::ErrorKind::NotFound {
-            return "Wine is required to launch the Windows game client on Linux. Install Wine and try again.".into();
-        }
-        format!("Failed to launch game: {error}")
-    })?;
-
-    Ok(())
+    runtime::launch(&wow_exe, &dir)
 }
 
 // ── Patch download ──────────────────────────────────────────
@@ -1130,6 +1082,9 @@ fn canonical_game_path(game_dir: &Path) -> Result<String, String> {
 
 fn validate_addon_name(name: &str) -> bool {
     !name.is_empty()
+        && !name
+            .chars()
+            .any(|character| character == '/' || character == '\\')
         && Path::new(name).components().count() == 1
         && matches!(
             Path::new(name).components().next(),
@@ -1797,18 +1752,22 @@ pub fn run() {
         .build()
         .expect("Failed to create HTTP client");
 
-    tauri::Builder::default()
+    let mut builder = tauri::Builder::default();
+
+    #[cfg(any(windows, target_os = "linux"))]
+    {
+        builder = builder.plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+            if let Some(window) = app.get_webview_window("main") {
+                let _ = window.show();
+                let _ = window.unminimize();
+                let _ = window.set_focus();
+            }
+        }));
+    }
+
+    builder
         .manage(HttpClient(http_client))
         .setup(|app| {
-            #[cfg(windows)]
-            match AppInstanceMutex::acquire()? {
-                Some(mutex) => app.manage(mutex),
-                None => {
-                    app.handle().exit(0);
-                    return Ok(());
-                }
-            };
-
             #[cfg(windows)]
             let window = app.get_webview_window("main").unwrap();
 
@@ -1864,6 +1823,7 @@ pub fn run() {
             get_launcher_config,
             get_patch_manifest,
             check_game_directory,
+            check_game_runtime,
             check_server_status,
             check_launcher_update,
             apply_launcher_update,
@@ -2021,6 +1981,8 @@ mod tests {
         assert!(!manifest_matches_game(&manifest, "D:\\Other"));
         manifest.addons[0].name = "../Addon".into();
         assert!(!manifest_matches_game(&manifest, "C:\\Game"));
+        assert!(!validate_addon_name("Addon\\Nested"));
+        assert!(!validate_addon_name("Addon/Nested"));
     }
 
     #[test]

@@ -20,7 +20,6 @@ static UPDATER_EXE: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/rx-updater
 
 const UPDATE_MANIFEST_URL: &str =
     "https://github.com/Mirenel/rx-launcher/releases/latest/download/latest.json";
-const UPDATE_ROOT_DIR: &str = "Project Rx Launcher\\updates";
 const UPDATE_MAX_BYTES: u64 = 512 * 1024 * 1024;
 const MANIFEST_TIMEOUT: Duration = Duration::from_secs(30);
 const DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(15 * 60);
@@ -413,7 +412,7 @@ fn verify_file_hash(path: &Path, expected: &str) -> Result<(), String> {
 }
 
 fn create_update_dir() -> Result<PathBuf, String> {
-    let root = std::env::temp_dir().join(UPDATE_ROOT_DIR);
+    let root = update_root_dir();
     fs::create_dir_all(&root)
         .map_err(|_| "Could not create the launcher update directory".to_string())?;
     let path = root.join(format!("update-{}-{}", std::process::id(), unique_suffix()));
@@ -464,7 +463,7 @@ fn unique_suffix() -> u128 {
 }
 
 fn cleanup_stale_update_dirs() {
-    let root = std::env::temp_dir().join(UPDATE_ROOT_DIR);
+    let root = update_root_dir();
     let Ok(entries) = fs::read_dir(&root) else {
         return;
     };
@@ -488,7 +487,7 @@ fn cleanup_stale_update_dirs() {
 }
 
 fn log_update(message: &str) {
-    let root = std::env::temp_dir().join(UPDATE_ROOT_DIR);
+    let root = update_root_dir();
     let _ = fs::create_dir_all(&root);
     if let Ok(mut file) = OpenOptions::new()
         .create(true)
@@ -497,6 +496,12 @@ fn log_update(message: &str) {
     {
         let _ = writeln!(file, "{} {message}", chrono_like_timestamp());
     }
+}
+
+fn update_root_dir() -> PathBuf {
+    std::env::temp_dir()
+        .join("Project Rx Launcher")
+        .join("updates")
 }
 
 fn chrono_like_timestamp() -> String {
@@ -514,6 +519,12 @@ mod tests {
     fn update_state_has_transaction_phases() {
         assert_ne!(UpdateState::Downloading, UpdateState::Applying);
         assert_eq!(UpdateState::Idle, UpdateState::Idle);
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn update_root_uses_native_linux_separators() {
+        assert!(!update_root_dir().to_string_lossy().contains('\\'));
     }
 
     #[test]
