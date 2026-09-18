@@ -36,7 +36,8 @@ pub struct UpdateManifest {
     pub sha256: String,
     pub signature: String,
     #[serde(default)]
-    #[cfg_attr(not(windows), allow(dead_code))]
+    // The standalone updater shares this signed schema but does not use release notes.
+    #[allow(dead_code)]
     pub notes: Option<String>,
 }
 

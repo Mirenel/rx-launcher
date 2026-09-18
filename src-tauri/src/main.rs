@@ -2,8 +2,10 @@
 // does not open a console window.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+#[cfg(any(target_os = "linux", test))]
 use std::fmt::Display;
 
+#[cfg(any(target_os = "linux", test))]
 fn ignore_path_fix_failure<E: Display>(result: Result<(), E>) {
     if let Err(error) = result {
         eprintln!("Could not refresh the GUI process PATH: {error}. Continuing startup.");
