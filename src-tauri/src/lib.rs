@@ -46,6 +46,10 @@ struct HttpClient(reqwest::Client);
 struct OperationLock(Arc<tokio::sync::Mutex<()>>);
 
 impl OperationLock {
+    async fn acquire(&self) -> tokio::sync::OwnedMutexGuard<()> {
+        self.0.clone().lock_owned().await
+    }
+
     async fn try_acquire(&self) -> Result<tokio::sync::OwnedMutexGuard<()>, String> {
         self.0
             .clone()
@@ -140,8 +144,31 @@ async fn check_launcher_update(
 }
 
 #[tauri::command]
-async fn apply_launcher_update(app: tauri::AppHandle) -> Result<(), String> {
+async fn apply_launcher_update(
+    app: tauri::AppHandle,
+    operations: tauri::State<'_, OperationLock>,
+) -> Result<(), String> {
+    let _operation = operations.acquire().await;
     update::check_for_update_and_apply(app).await
+}
+
+#[tauri::command]
+async fn request_exit(
+    app: tauri::AppHandle,
+    operations: tauri::State<'_, OperationLock>,
+) -> Result<(), String> {
+    let _operation = operations.acquire().await;
+    app.exit(0);
+    Ok(())
+}
+
+fn schedule_exit(app: &tauri::AppHandle) {
+    let app = app.clone();
+    let operations = app.state::<OperationLock>().inner().clone();
+    tauri::async_runtime::spawn(async move {
+        let _operation = operations.acquire().await;
+        app.exit(0);
+    });
 }
 
 #[tauri::command]
@@ -535,6 +562,50 @@ fn replace_verified_file(part: &Path, destination: &Path, label: &str) -> Result
         // this private rollback copy is harmless and avoids reporting a false
         // install failure after a successful replacement.
         fs::remove_file(&backup).ok();
+    }
+    Ok(())
+}
+
+/// Copy a file through a newly-created inode. In particular, never let a
+/// copy operation truncate an existing destination inode: an addon backup can
+/// contain a hard link to a protected game executable.
+fn copy_file_atomically(source: &Path, destination: &Path, label: &str) -> Result<(), String> {
+    ensure_safe_path_components(source)?;
+    ensure_safe_path_components(destination)?;
+    let source_metadata = fs::symlink_metadata(source)
+        .map_err(|_| format!("Could not inspect the source for {label}"))?;
+    if is_link_or_reparse_point(&source_metadata) || !source_metadata.is_file() {
+        return Err(format!(
+            "Could not copy {label}: the source is not a regular file"
+        ));
+    }
+    if let Ok(destination_metadata) = fs::symlink_metadata(destination) {
+        if is_link_or_reparse_point(&destination_metadata) || !destination_metadata.is_file() {
+            return Err(format!(
+                "Could not copy {label}: the destination is not a regular file"
+            ));
+        }
+    }
+    let name = destination
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or("file");
+    let temp = destination.with_file_name(format!(".{name}.rx-copy-{}", std::process::id()));
+    if fs::symlink_metadata(&temp).is_ok() {
+        return Err(format!(
+            "Could not copy {label}: a previous copy is incomplete"
+        ));
+    }
+    if let Some(parent) = temp.parent() {
+        fs::create_dir_all(parent).map_err(|_| format!("Could not prepare {label}"))?;
+    }
+    if let Err(error) = fs::copy(source, &temp) {
+        fs::remove_file(&temp).ok();
+        return Err(format!("Could not copy {label}: {error}"));
+    }
+    if let Err(error) = replace_verified_file(&temp, destination, label) {
+        fs::remove_file(&temp).ok();
+        return Err(error);
     }
     Ok(())
 }
@@ -1070,7 +1141,7 @@ async fn download_patch(
                     &app,
                     completed_bytes,
                     total_bytes,
-                    "Migrated legacy addon tracking; addon folders not in the current signed release were preserved as unmanaged content.".into(),
+                    "Migrated legacy addon tracking; legacy folders and addon folders not in the current signed release were preserved as unmanaged content.".into(),
                     true,
                     completed_bytes,
                     total_bytes,
@@ -1629,8 +1700,7 @@ fn preserve_modified_addon_files(
                     return Err(format!("Could not preserve addon file {}", file.path));
                 }
             }
-            fs::copy(&source, &destination)
-                .map_err(|_| format!("Could not preserve addon file {}", file.path))?;
+            copy_file_atomically(&source, &destination, &format!("addon file {}", file.path))?;
         }
         Ok::<(), String>(())
     })();
@@ -1642,6 +1712,29 @@ fn preserve_modified_addon_files(
     }
 
     Ok((Some(backup_name), created_backup))
+}
+
+/// Legacy tracking has no authenticated file inventory, so its active addon
+/// directory cannot safely be compared with the new release. Preserve it in
+/// a separate durable directory instead of modifying the original user
+/// backup or treating old launcher files as user edits.
+fn preserve_legacy_addon_directory(
+    addons_dir: &Path,
+    current: &Path,
+    addon_name: &str,
+) -> Result<PathBuf, String> {
+    ensure_safe_path_components(current)?;
+    collect_addon_files(current)?;
+    let backup = addons_dir.join(format!(".rx-legacy-{addon_name}"));
+    ensure_safe_path_components(&backup)?;
+    if fs::symlink_metadata(&backup).is_ok() {
+        return Err(format!(
+            "Could not preserve legacy addon {addon_name}: its migration backup already exists"
+        ));
+    }
+    fs::rename(current, &backup)
+        .map_err(|_| format!("Could not preserve legacy addon {addon_name}"))?;
+    Ok(backup)
 }
 
 fn addon_files_owned_or_missing(addons_dir: &Path, addon: &InstalledAddon) -> bool {
@@ -1797,6 +1890,37 @@ fn restore_tracked_addon(addons_dir: &Path, addon: &InstalledAddon) -> Result<bo
     Ok(true)
 }
 
+fn restore_moved_addons(
+    addons_dir: &Path,
+    rollback: &Path,
+    moved_addons: &[(String, PathBuf)],
+) -> Result<(), String> {
+    let mut errors = Vec::new();
+    for (name, source) in moved_addons.iter().rev() {
+        let destination = addons_dir.join(name);
+        match (source.exists(), destination.exists()) {
+            (false, true) => {}
+            (false, false) => errors.push(format!("moved addon {name} is missing")),
+            (true, true) => errors.push(format!(
+                "cannot restore moved addon {name}: destination already exists"
+            )),
+            (true, false) => {
+                if let Err(error) = fs::rename(source, &destination) {
+                    errors.push(format!("could not restore moved addon {name}: {error}"));
+                }
+            }
+        }
+    }
+    if !errors.is_empty() {
+        return Err(errors.join("; "));
+    }
+    match fs::remove_dir_all(rollback) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(format!("could not remove addon rollback: {error}")),
+    }
+}
+
 fn install_staged_addons(
     app: &tauri::AppHandle,
     game_dir: &Path,
@@ -1820,8 +1944,9 @@ fn install_staged_addons(
 
     let rollback = addons_dir.join(format!(".rx-rollback-{}", std::process::id()));
     if rollback.exists() {
-        fs::remove_dir_all(&rollback)
-            .map_err(|_| "Could not clear addon rollback directory".to_string())?;
+        return Err(
+            "A previous addon rollback is still present; repair it before trying again".into(),
+        );
     }
     fs::create_dir(&rollback)
         .map_err(|_| "Could not create addon rollback directory".to_string())?;
@@ -1831,6 +1956,7 @@ fn install_staged_addons(
     let mut created_backups: Vec<(String, String)> = Vec::new();
     let mut created_preserved_backups: Vec<String> = Vec::new();
     let mut prepared_backups: Vec<(String, Option<String>)> = Vec::new();
+    let mut moved_addons: Vec<(String, PathBuf)> = Vec::new();
 
     let result = (|| {
         // Stage launcher-owned directories before mutation so later changes can roll back.
@@ -1852,9 +1978,11 @@ fn install_staged_addons(
                         }
                     }
                     prepared_backups.push((addon.name.clone(), backup_name));
-                    fs::rename(&current, rollback.join(&addon.name)).map_err(|_| {
+                    let rollback_path = rollback.join(&addon.name);
+                    fs::rename(&current, &rollback_path).map_err(|_| {
                         format!("Could not prepare addon {} for replacement", addon.name)
                     })?;
+                    moved_addons.push((addon.name.clone(), rollback_path));
                 }
                 Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
                     prepared_backups.push((addon.name.clone(), addon.backup_name.clone()));
@@ -1868,10 +1996,10 @@ fn install_staged_addons(
             }
         }
 
-        // The legacy manifest did not contain file hashes. Compare legacy
-        // folders with the authenticated staged release so only files that
-        // match the new signed content are treated as launcher-owned. Any
-        // other files are preserved in the existing user backup overlay.
+        // The legacy manifest did not contain file hashes. Preserve active
+        // legacy folders separately; comparing them to the new release would
+        // mistake ordinary release changes for user edits and overwrite the
+        // original user backup.
         if let Some(legacy) = &legacy_addons {
             for addon in legacy
                 .addons
@@ -1880,12 +2008,6 @@ fn install_staged_addons(
                 .filter(|addon| !old.addons.iter().any(|old| old.name == addon.name))
             {
                 let current = addons_dir.join(&addon.name);
-                let staged = stage.join(&addon.name);
-                let expected = InstalledAddon {
-                    name: addon.name.clone(),
-                    backup_name: addon.backup_name.clone(),
-                    files: collect_addon_files(&staged)?,
-                };
                 match fs::symlink_metadata(&current) {
                     Ok(metadata) => {
                         if is_link_or_reparse_point(&metadata) || !metadata.is_dir() {
@@ -1894,17 +2016,10 @@ fn install_staged_addons(
                                 addon.name
                             ));
                         }
-                        let (backup_name, created) =
-                            preserve_modified_addon_files(addons_dir, &current, &expected)?;
-                        if created {
-                            if let Some(name) = &backup_name {
-                                created_preserved_backups.push(name.clone());
-                            }
-                        }
-                        prepared_backups.push((addon.name.clone(), backup_name));
-                        fs::rename(&current, rollback.join(&addon.name)).map_err(|_| {
-                            format!("Could not prepare addon {} for replacement", addon.name)
-                        })?;
+                        let legacy_backup =
+                            preserve_legacy_addon_directory(addons_dir, &current, &addon.name)?;
+                        prepared_backups.push((addon.name.clone(), addon.backup_name.clone()));
+                        moved_addons.push((addon.name.clone(), legacy_backup));
                     }
                     Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
                         prepared_backups.push((addon.name.clone(), addon.backup_name.clone()));
@@ -2007,38 +2122,61 @@ fn install_staged_addons(
     let legacy_migrated = match result {
         Ok(value) => value,
         Err(error) => {
+            let mut rollback_errors = Vec::new();
             for name in installed_names.iter().rev() {
                 let current = addons_dir.join(name);
                 if current.exists() {
-                    fs::remove_dir_all(&current).ok();
+                    if let Err(cleanup_error) = fs::remove_dir_all(&current) {
+                        rollback_errors.push(format!(
+                            "could not remove staged addon {}: {cleanup_error}",
+                            name
+                        ));
+                    }
                 }
             }
             for (name, backup_name) in restored_backups.iter().rev() {
                 let restored = addons_dir.join(name);
                 if restored.exists() {
-                    fs::rename(restored, addons_dir.join(backup_name)).ok();
+                    if let Err(cleanup_error) = fs::rename(restored, addons_dir.join(backup_name)) {
+                        rollback_errors.push(format!(
+                            "could not restore addon backup {}: {cleanup_error}",
+                            name
+                        ));
+                    }
                 }
             }
             for (name, backup_name) in created_backups.iter().rev() {
                 let backup = addons_dir.join(backup_name);
                 if backup.exists() && !addons_dir.join(name).exists() {
-                    fs::rename(backup, addons_dir.join(name)).ok();
+                    if let Err(cleanup_error) = fs::rename(backup, addons_dir.join(name)) {
+                        rollback_errors.push(format!(
+                            "could not restore pre-existing addon {}: {cleanup_error}",
+                            name
+                        ));
+                    }
                 }
             }
             for backup_name in created_preserved_backups.iter().rev() {
                 let backup = addons_dir.join(backup_name);
                 if fs::symlink_metadata(&backup).is_ok() {
-                    fs::remove_dir_all(backup).ok();
+                    if let Err(cleanup_error) = fs::remove_dir_all(backup) {
+                        rollback_errors.push(format!(
+                            "could not remove temporary addon backup {}: {cleanup_error}",
+                            backup_name
+                        ));
+                    }
                 }
             }
-            for addon in &old.addons {
-                let prior = rollback.join(&addon.name);
-                if prior.exists() && !addons_dir.join(&addon.name).exists() {
-                    fs::rename(prior, addons_dir.join(&addon.name)).ok();
-                }
+            if let Err(cleanup_error) = restore_moved_addons(addons_dir, &rollback, &moved_addons) {
+                rollback_errors.push(cleanup_error);
             }
-            fs::remove_dir_all(&rollback).ok();
-            return Err(error);
+            if rollback_errors.is_empty() {
+                return Err(error);
+            }
+            return Err(format!(
+                "{error}; addon recovery could not be completed; recovery data was retained where possible: {}",
+                rollback_errors.join("; ")
+            ));
         }
     };
     fs::remove_dir_all(&rollback)
@@ -2576,7 +2714,7 @@ pub fn run() {
                         }
                     }
                     "quit" => {
-                        app.exit(0);
+                        schedule_exit(app);
                     }
                     _ => {}
                 })
@@ -2609,6 +2747,7 @@ pub fn run() {
             check_server_status,
             check_launcher_update,
             apply_launcher_update,
+            request_exit,
             get_news,
             launch_game,
             download_patch,
@@ -2882,6 +3021,91 @@ mod tests {
         assert!(created);
         assert_eq!(fs::read(backup.join("main.lua")).unwrap(), b"modified");
         assert_eq!(fs::read(backup.join("user.lua")).unwrap(), b"added by user");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn addon_backup_copy_does_not_modify_hard_link_source() {
+        let temp = TestDir::new();
+        let addons_dir = temp.0.join("AddOns");
+        let addon_dir = addons_dir.join("Addon");
+        let backup_dir = addons_dir.join(".rx-user-backup-Addon");
+        fs::create_dir_all(&addon_dir).unwrap();
+        fs::create_dir_all(&backup_dir).unwrap();
+        let wow = temp.0.join("Wow.exe");
+        fs::write(&wow, b"protected executable").unwrap();
+        fs::write(addon_dir.join("main.lua"), b"modified").unwrap();
+        fs::hard_link(&wow, backup_dir.join("main.lua")).unwrap();
+        let addon = InstalledAddon {
+            name: "Addon".into(),
+            backup_name: Some(".rx-user-backup-Addon".into()),
+            files: vec![InstalledAddonFile {
+                path: "main.lua".into(),
+                size: 8,
+                sha256: format!("{:x}", Sha256::digest(b"original")),
+            }],
+        };
+
+        preserve_modified_addon_files(&addons_dir, &addon_dir, &addon).unwrap();
+
+        assert_eq!(fs::read(&wow).unwrap(), b"protected executable");
+        assert_eq!(fs::read(backup_dir.join("main.lua")).unwrap(), b"modified");
+    }
+
+    #[test]
+    fn legacy_addon_preservation_keeps_original_user_backup() {
+        let temp = TestDir::new();
+        let addons_dir = temp.0.join("AddOns");
+        let current = addons_dir.join("Addon");
+        let original_backup = addons_dir.join(".rx-user-backup-Addon");
+        fs::create_dir_all(&current).unwrap();
+        fs::create_dir_all(&original_backup).unwrap();
+        fs::write(current.join("main.lua"), b"old launcher release").unwrap();
+        fs::write(original_backup.join("main.lua"), b"user version").unwrap();
+
+        let legacy_backup =
+            preserve_legacy_addon_directory(&addons_dir, &current, "Addon").unwrap();
+
+        assert!(!current.exists());
+        assert_eq!(
+            fs::read(original_backup.join("main.lua")).unwrap(),
+            b"user version"
+        );
+        assert_eq!(
+            fs::read(legacy_backup.join("main.lua")).unwrap(),
+            b"old launcher release"
+        );
+        fs::rename(legacy_backup, current).unwrap();
+    }
+
+    #[test]
+    fn moved_addon_rollback_restores_all_journaled_directories() {
+        let temp = TestDir::new();
+        let addons_dir = temp.0.join("AddOns");
+        let rollback = addons_dir.join(".rx-rollback-test");
+        let first = rollback.join("First");
+        let second = addons_dir.join(".rx-legacy-Second");
+        fs::create_dir_all(&first).unwrap();
+        fs::create_dir_all(&second).unwrap();
+        fs::write(first.join("main.lua"), b"first").unwrap();
+        fs::write(second.join("main.lua"), b"second").unwrap();
+
+        restore_moved_addons(
+            &addons_dir,
+            &rollback,
+            &[("First".into(), first), ("Second".into(), second)],
+        )
+        .unwrap();
+
+        assert_eq!(
+            fs::read(addons_dir.join("First/main.lua")).unwrap(),
+            b"first"
+        );
+        assert_eq!(
+            fs::read(addons_dir.join("Second/main.lua")).unwrap(),
+            b"second"
+        );
+        assert!(!rollback.exists());
     }
 
     #[test]

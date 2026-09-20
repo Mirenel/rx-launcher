@@ -28,7 +28,6 @@ window.addEventListener("DOMContentLoaded", function () {
 
   var tauriFs = window.__TAURI__.fs;
   var tauriDialog = window.__TAURI__.dialog;
-  var tauriProcess = window.__TAURI__.process;
   var tauriEvent = window.__TAURI__.event;
   var BaseDir = tauriFs.BaseDirectory;
 
@@ -95,7 +94,9 @@ window.addEventListener("DOMContentLoaded", function () {
   });
 
   document.getElementById('btn-close').addEventListener('click', function () {
-    tauriProcess.exit(0);
+    invoke('request_exit').catch(function () {
+      showToast('Could not close the launcher');
+    });
   });
 
   document.getElementById('drag-zone').addEventListener('mousedown', function (e) {
@@ -253,6 +254,8 @@ window.addEventListener("DOMContentLoaded", function () {
     downloadBtn.disabled = active || !patchManifestReady || !hasGamePath || downloading;
     repairBtn.disabled = active;
     uninstallBtn.disabled = active;
+    launcherUpdateInstall.disabled = active;
+    launcherUpdateBannerBtn.disabled = active;
     playBtn.disabled = active || !hasGamePath || !runtimeReady || downloading;
   }
 
@@ -1019,7 +1022,7 @@ window.addEventListener("DOMContentLoaded", function () {
       });
     }).then(function () {
       if (!settings.keep_open) {
-        tauriProcess.exit(0).catch(function () {
+        invoke('request_exit').catch(function () {
           setGameOperationActive(false);
           showToast('Could not close the launcher');
         });
@@ -1139,6 +1142,8 @@ window.addEventListener("DOMContentLoaded", function () {
   });
 
   launcherUpdateInstall.addEventListener('click', function () {
+    if (gameOperationActive) return;
+    setGameOperationActive(true);
     launcherUpdateInstall.disabled = true;
     launcherUpdateSkip.disabled = true;
     launcherUpdateBannerBtn.disabled = true;
@@ -1157,7 +1162,9 @@ window.addEventListener("DOMContentLoaded", function () {
       launcherUpdateNotice = null;
       launcherUpdateBanner.hidden = true;
       launcherUpdateBanner.classList.add('hidden');
+      setGameOperationActive(false);
     }).catch(function (e) {
+      setGameOperationActive(false);
       launcherUpdateInstall.disabled = false;
       launcherUpdateSkip.disabled = false;
       launcherUpdateBannerBtn.disabled = false;
