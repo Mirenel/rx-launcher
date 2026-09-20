@@ -70,6 +70,7 @@ impl OperationLock {
     }
 
     fn permit_exit(&self) {
+        self.shutting_down.store(true, Ordering::SeqCst);
         self.exit_permitted.store(true, Ordering::SeqCst);
     }
 
@@ -2890,11 +2891,13 @@ mod tests {
         let operations = OperationLock::default();
         tauri::async_runtime::block_on(async {
             let active = operations.try_acquire().await.unwrap();
-            operations.begin_shutdown();
+            // This is the updater's before-exit transition. It must close
+            // admission before the updater releases its operation guard.
+            operations.permit_exit();
             assert!(operations.try_acquire().await.is_err());
             drop(active);
-            operations.permit_exit();
             assert!(operations.exit_is_permitted());
+            assert!(operations.try_acquire().await.is_err());
         });
     }
 
