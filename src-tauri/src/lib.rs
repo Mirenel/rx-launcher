@@ -6,6 +6,7 @@ use std::io::{BufReader, Read, Write};
 use std::net::TcpStream;
 use std::net::ToSocketAddrs;
 use std::path::{Component, Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 use tauri::menu::{Menu, MenuItem};
@@ -42,19 +43,54 @@ const INSTALLED_CONTENT_FILENAME: &str = "installed_content.json";
 
 struct HttpClient(reqwest::Client);
 
-#[derive(Clone, Default)]
-struct OperationLock(Arc<tokio::sync::Mutex<()>>);
+#[derive(Clone)]
+struct OperationLock {
+    lock: Arc<tokio::sync::Mutex<()>>,
+    shutting_down: Arc<AtomicBool>,
+    exit_permitted: Arc<AtomicBool>,
+}
+
+impl Default for OperationLock {
+    fn default() -> Self {
+        Self {
+            lock: Arc::new(tokio::sync::Mutex::new(())),
+            shutting_down: Arc::new(AtomicBool::new(false)),
+            exit_permitted: Arc::new(AtomicBool::new(false)),
+        }
+    }
+}
 
 impl OperationLock {
     async fn acquire(&self) -> tokio::sync::OwnedMutexGuard<()> {
-        self.0.clone().lock_owned().await
+        self.lock.clone().lock_owned().await
+    }
+
+    fn begin_shutdown(&self) {
+        self.shutting_down.store(true, Ordering::SeqCst);
+    }
+
+    fn permit_exit(&self) {
+        self.exit_permitted.store(true, Ordering::SeqCst);
+    }
+
+    fn exit_is_permitted(&self) -> bool {
+        self.exit_permitted.load(Ordering::SeqCst)
     }
 
     async fn try_acquire(&self) -> Result<tokio::sync::OwnedMutexGuard<()>, String> {
-        self.0
+        if self.shutting_down.load(Ordering::SeqCst) {
+            return Err("Launcher shutdown is already in progress".into());
+        }
+        let operation = self
+            .lock
             .clone()
             .try_lock_owned()
-            .map_err(|_| "Another game operation is already in progress".into())
+            .map_err(|_| "Another game operation is already in progress".to_string())?;
+        if self.shutting_down.load(Ordering::SeqCst) {
+            drop(operation);
+            return Err("Launcher shutdown is already in progress".into());
+        }
+        Ok(operation)
     }
 }
 
@@ -148,8 +184,12 @@ async fn apply_launcher_update(
     app: tauri::AppHandle,
     operations: tauri::State<'_, OperationLock>,
 ) -> Result<(), String> {
-    let _operation = operations.acquire().await;
-    update::check_for_update_and_apply(app).await
+    let _operation = operations.try_acquire().await?;
+    let on_exit = {
+        let operations = operations.inner().clone();
+        move || operations.permit_exit()
+    };
+    update::check_for_update_and_apply(app, on_exit).await
 }
 
 #[tauri::command]
@@ -157,7 +197,9 @@ async fn request_exit(
     app: tauri::AppHandle,
     operations: tauri::State<'_, OperationLock>,
 ) -> Result<(), String> {
+    operations.begin_shutdown();
     let _operation = operations.acquire().await;
+    operations.permit_exit();
     app.exit(0);
     Ok(())
 }
@@ -165,8 +207,10 @@ async fn request_exit(
 fn schedule_exit(app: &tauri::AppHandle) {
     let app = app.clone();
     let operations = app.state::<OperationLock>().inner().clone();
+    operations.begin_shutdown();
     tauri::async_runtime::spawn(async move {
         let _operation = operations.acquire().await;
+        operations.permit_exit();
         app.exit(0);
     });
 }
@@ -599,10 +643,28 @@ fn copy_file_atomically(source: &Path, destination: &Path, label: &str) -> Resul
     if let Some(parent) = temp.parent() {
         fs::create_dir_all(parent).map_err(|_| format!("Could not prepare {label}"))?;
     }
-    if let Err(error) = fs::copy(source, &temp) {
+    let mut source_file = fs::File::open(source)
+        .map_err(|error| format!("Could not open the source for {label}: {error}"))?;
+    let mut temp_file = match fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&temp)
+    {
+        Ok(file) => file,
+        Err(error) => {
+            return Err(format!(
+                "Could not create the temporary copy for {label}: {error}"
+            ));
+        }
+    };
+    if let Err(error) =
+        std::io::copy(&mut source_file, &mut temp_file).and_then(|_| temp_file.sync_all())
+    {
+        drop(temp_file);
         fs::remove_file(&temp).ok();
         return Err(format!("Could not copy {label}: {error}"));
     }
+    drop(temp_file);
     if let Err(error) = replace_verified_file(&temp, destination, label) {
         fs::remove_file(&temp).ok();
         return Err(error);
@@ -2682,6 +2744,16 @@ pub fn run() {
     builder
         .manage(HttpClient(http_client))
         .manage(OperationLock::default())
+        .on_window_event(|window, event| {
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                let app = window.app_handle();
+                if app.state::<OperationLock>().exit_is_permitted() {
+                    return;
+                }
+                api.prevent_close();
+                schedule_exit(&app);
+            }
+        })
         .setup(|app| {
             // Create the app config directory before the frontend uses the
             // scoped filesystem plugin. The plugin cannot authorize a
@@ -2758,8 +2830,17 @@ pub fn run() {
             get_changelog,
             verify_patch,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|app_handle, event| {
+            if let tauri::RunEvent::ExitRequested { api, .. } = event {
+                let operations = app_handle.state::<OperationLock>();
+                if !operations.exit_is_permitted() {
+                    api.prevent_exit();
+                    schedule_exit(app_handle);
+                }
+            }
+        });
 }
 
 #[cfg(test)]
@@ -2802,6 +2883,19 @@ mod tests {
             writer.write_all(bytes).unwrap();
         }
         writer.finish().unwrap();
+    }
+
+    #[test]
+    fn shutdown_request_blocks_new_game_operations() {
+        let operations = OperationLock::default();
+        tauri::async_runtime::block_on(async {
+            let active = operations.try_acquire().await.unwrap();
+            operations.begin_shutdown();
+            assert!(operations.try_acquire().await.is_err());
+            drop(active);
+            operations.permit_exit();
+            assert!(operations.exit_is_permitted());
+        });
     }
 
     #[test]

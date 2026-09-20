@@ -90,15 +90,22 @@ async fn check_for_update_inner(app: tauri::AppHandle) -> Result<Option<UpdateNo
     }))
 }
 
-pub async fn check_for_update_and_apply(app: tauri::AppHandle) -> Result<(), String> {
+pub async fn check_for_update_and_apply<F>(
+    app: tauri::AppHandle,
+    before_exit: F,
+) -> Result<(), String>
+where
+    F: FnOnce() + Send + 'static,
+{
     #[cfg(not(windows))]
     {
         let _ = app;
+        let _ = before_exit;
         return Err("Launcher updates are not available for Linux builds yet".into());
     }
 
     #[cfg(windows)]
-    let result = check_for_update_and_apply_inner(app).await;
+    let result = check_for_update_and_apply_inner(app, before_exit).await;
     #[cfg(windows)]
     if let Err(error) = &result {
         log_update(&format!(
@@ -110,7 +117,13 @@ pub async fn check_for_update_and_apply(app: tauri::AppHandle) -> Result<(), Str
 }
 
 #[cfg(windows)]
-async fn check_for_update_and_apply_inner(app: tauri::AppHandle) -> Result<(), String> {
+async fn check_for_update_and_apply_inner<F>(
+    app: tauri::AppHandle,
+    before_exit: F,
+) -> Result<(), String>
+where
+    F: FnOnce() + Send + 'static,
+{
     if cfg!(debug_assertions) {
         log_update("debug build: launcher update skipped");
         return Ok(());
@@ -195,6 +208,7 @@ async fn check_for_update_and_apply_inner(app: tauri::AppHandle) -> Result<(), S
     }
     log_update("embedded helper started; launcher exiting for replacement");
     log_update("helper validated the launcher process image; exiting for replacement");
+    before_exit();
     app.exit(0);
     Ok(())
 }
