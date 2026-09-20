@@ -1,5 +1,5 @@
-// Keep release-only binaries outside src/bin; Tauri auto-discovers binaries
-// there for application bundles.
+// Release-only binaries live under src/tools because Tauri auto-discovers
+// binaries under src/bin for application bundles.
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use ed25519_dalek::{Signer, SigningKey};
 use rand_core::OsRng;

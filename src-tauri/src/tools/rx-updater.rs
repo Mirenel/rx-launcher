@@ -1,5 +1,5 @@
-// Keep release-only binaries outside src/bin; Tauri auto-discovers binaries
-// there for application bundles.
+// Release-only binaries live under src/tools because Tauri auto-discovers
+// binaries under src/bin for application bundles.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 #[cfg(windows)]
@@ -288,9 +288,9 @@ mod windows_updater {
         let mut file =
             fs::File::open(path).map_err(|_| "Could not open the staged executable".to_string())?;
         let mut hasher = Sha256::new();
-        // Keep the large hashing buffer on the heap. The standalone helper
-        // has a small Windows thread stack, and a 1 MiB stack array can cause
-        // an abrupt stack-overflow termination before the error logger runs.
+        // The large hashing buffer stays on the heap because the standalone
+        // helper has a small Windows thread stack; a 1 MiB stack array could
+        // terminate the process before the error logger runs.
         let mut buffer = vec![0u8; 1024 * 1024];
         loop {
             let count = file

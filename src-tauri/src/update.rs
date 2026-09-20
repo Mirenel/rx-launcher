@@ -1,4 +1,4 @@
-// The signed self-updater is Windows-only; Linux keeps the public no-updater
+// The signed self-updater is Windows-only; Linux uses the public no-updater
 // behavior until a signed Linux artifact and updater are available.
 #[cfg(windows)]
 use futures_util::StreamExt;

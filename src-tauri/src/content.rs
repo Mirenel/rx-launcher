@@ -14,8 +14,8 @@ pub const CONTENT_MAX_FILE_BYTES: u64 = 512 * 1024 * 1024;
 pub const CONTENT_MAX_TOTAL_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 pub const CONTENT_MAX_PATCH_BYTES: u64 = 16 * 1024 * 1024;
 
-// The checked-in public key is safe to distribute with every launcher. The
-// environment override is useful for deliberate key rotation and tests.
+// The checked-in public key is safe to distribute with every launcher. An
+// environment override supports deliberate key rotation and tests.
 pub const CONTENT_PUBLIC_KEY_B64: &str = match option_env!("RX_CONTENT_PUBLIC_KEY_B64") {
     Some(value) if !value.is_empty() => value,
     _ => include_str!("../public-keys/content-public-key.b64"),
@@ -268,9 +268,9 @@ pub fn validate_relative_content_path(value: &str) -> Result<(), String> {
 }
 
 /// Windows strips trailing dots and spaces from ordinary file names and
-/// reserves several device names even when an extension is present. Reject
-/// these spellings on every platform so a signed manifest has one unambiguous
-/// destination on Windows and Linux.
+/// reserves several device names even when an extension is present. These
+/// spellings are rejected on every platform so a signed manifest has one
+/// unambiguous destination on Windows and Linux.
 pub fn validate_windows_component(value: &str) -> Result<(), String> {
     if value.is_empty()
         || value == "."

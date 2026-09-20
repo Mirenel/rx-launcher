@@ -42,7 +42,7 @@ window.addEventListener("DOMContentLoaded", function () {
         try {
           var parsed = JSON.parse(text);
           if (parsed && typeof parsed === 'object') {
-            // Ignore unknown or incorrectly typed persisted values.
+            // Unknown or incorrectly typed persisted values are ignored.
             if (typeof parsed.game_path === 'string') settings.game_path = parsed.game_path;
             if (typeof parsed.wine_prefix === 'string' && parsed.wine_prefix.length > 0) settings.wine_prefix = parsed.wine_prefix;
             if (typeof parsed.installed_patch_version === 'string') settings.installed_patch_version = parsed.installed_patch_version;
@@ -52,11 +52,11 @@ window.addEventListener("DOMContentLoaded", function () {
             if (typeof parsed.last_news_date === 'string') settings.last_news_date = parsed.last_news_date;
           }
         } catch (e) {
-          // Malformed settings must not prevent the launcher from starting.
+          // Malformed settings do not prevent the launcher from starting.
         }
       })
       .catch(function () {
-        // A missing settings file is expected on the first launch.
+        // A missing settings file is expected during the first launch.
       });
   }
 
@@ -65,15 +65,16 @@ window.addEventListener("DOMContentLoaded", function () {
     var write = function () {
       return tauriFs.writeTextFile(SETTINGS_FILE, data, { baseDir: BaseDir.AppConfig })
         .catch(function () {
-          // The filesystem scope may not exist on first launch; create it and retry.
+          // The scoped filesystem requires the AppConfig directory before the
+          // first settings write; this path creates it before retrying.
           return tauriFs.mkdir('.', { baseDir: BaseDir.AppConfig, recursive: true })
             .then(function () {
               return tauriFs.writeTextFile(SETTINGS_FILE, data, { baseDir: BaseDir.AppConfig });
             });
         });
     };
-    // Serialize writes so a rapid checkbox/path/news interaction cannot
-    // overwrite a newer settings snapshot with an older one.
+    // Writes are serialized so rapid checkbox, path, or news interactions
+    // cannot overwrite a newer settings snapshot with an older one.
     settingsSaveQueue = settingsSaveQueue.catch(function () {}).then(write);
     return settingsSaveQueue;
   }
@@ -115,7 +116,7 @@ window.addEventListener("DOMContentLoaded", function () {
       var selected = b.dataset.tab === name;
       b.classList.toggle('active', selected);
       b.setAttribute('aria-selected', selected ? 'true' : 'false');
-      // Keep every navigation tab in the Tab order; arrow keys provide an
+      // All navigation tabs remain in the Tab order; arrow keys provide an
       // alternate way to move between tabs.
       b.tabIndex = 0;
     });
@@ -235,7 +236,7 @@ window.addEventListener("DOMContentLoaded", function () {
   var runtimeWarnRetry = document.getElementById('runtime-warn-retry');
 
   var pendingLinkUrl = null;
-  // Keep the community action available even when remote launcher metadata is unavailable.
+  // The community action remains available when remote launcher metadata is unavailable.
   var discordInviteUrl = 'https://discord.gg/VTWnWbqJYE';
   var pendingLaunchAction = null;
   var hasGamePath = false;
@@ -374,7 +375,7 @@ window.addEventListener("DOMContentLoaded", function () {
         newsList.appendChild(entry);
       });
 
-      // Restrict remote backgrounds to the Project Rx HTTPS origin allowed by the CSP.
+      // Remote backgrounds are limited to the Project Rx HTTPS origin allowed by the CSP.
       newsList.querySelectorAll('[data-bg]').forEach(function (el) {
         var src = el.getAttribute('data-bg').replace(/[\\'"();\s]/g, '');
         if (src && src.indexOf('https://projectrx.net/') === 0) {
@@ -739,8 +740,8 @@ window.addEventListener("DOMContentLoaded", function () {
     }).then(function () {
       setProgress(10);
       patchLogLine(force ? 'Verifying and re-installing Project Rx content...' : 'Preparing Project Rx content...');
-      // Patch mutations deliberately have no UI timeout: the backend may still be
-      // writing files, and allowing a retry would start a concurrent mutation.
+      // Patch mutations have no UI timeout because the backend may still be
+      // writing files; a retry during that interval would start a concurrent mutation.
       return invoke('download_patch', { gamePath: gamePath, repair: !!force });
     }).then(function (version) {
       setProgress(96);
@@ -756,7 +757,7 @@ window.addEventListener("DOMContentLoaded", function () {
       updatePlayButtonState();
       updatePatchDisplay();
       checkGameDirectory();
-      // Do not overwrite a user's custom realmlist; only fill in a missing value.
+      // A user's custom realmlist is preserved; this fills in only a missing value.
       invoke('check_realmlist', { gamePath: gamePath }).catch(function (e) {
         if (String(e).indexOf('not found') !== -1) {
           return invoke('patch_realmlist', { gamePath: gamePath }).then(function () {
@@ -977,7 +978,6 @@ window.addEventListener("DOMContentLoaded", function () {
     startPatchDownload(true);
   });
 
-  // Escape key closes the topmost visible modal
   document.addEventListener('keydown', function (e) {
     if (e.key === 'Tab') {
       var visible = document.querySelector('.modal-overlay.visible');
@@ -1012,9 +1012,8 @@ window.addEventListener("DOMContentLoaded", function () {
   });
 
   function doLaunch(gamePath) {
-    // Finish any queued checkbox/settings write before exiting or hiding the
-    // launcher. Otherwise the process can terminate before the new choice is
-    // persisted.
+    // Exit and tray-hide paths wait for the serialized settings write so the
+    // latest preference is persisted before the process or window changes state.
     saveSettings().catch(function () {}).then(function () {
       return invoke('launch_game', {
         gamePath: gamePath,
@@ -1151,9 +1150,9 @@ window.addEventListener("DOMContentLoaded", function () {
     launcherUpdateBannerBody.textContent = 'Downloading and verifying the launcher update...';
     launcherUpdateModalBody.textContent = 'Downloading and verifying the launcher update...';
     invoke('apply_launcher_update', null, 1200000).then(function () {
-      // A normal successful apply exits the old process before this resolves.
+      // Successful application exits the current process before this resolves.
       // This branch handles a race where the remote update disappears between
-      // the check and the user's confirmation.
+      // discovery and explicit confirmation.
       launcherUpdateInstall.disabled = false;
       launcherUpdateSkip.disabled = false;
       launcherUpdateBannerBtn.disabled = false;
@@ -1369,8 +1368,8 @@ window.addEventListener("DOMContentLoaded", function () {
     checkGameRuntime();
 
     // Content metadata is independently authenticated and may be hosted by
-    // either configured Project Rx source. It must not prevent the launcher
-    // shell from starting when both sources are temporarily unavailable.
+    // either configured Project Rx source. Temporary unavailability of both
+    // sources does not prevent the launcher shell from starting.
     invoke('get_patch_manifest', null, 25000).then(function (info) {
       config.patch_version = info.version;
       patchManifestReady = true;
@@ -1400,8 +1399,8 @@ window.addEventListener("DOMContentLoaded", function () {
     });
     loadNews();
 
-    // Update discovery is asynchronous and never blocks launcher startup. The
-    // user must confirm before any download or replacement begins.
+    // Update discovery is asynchronous and never blocks launcher startup.
+    // Downloads and replacement begin only after explicit user confirmation.
     setTimeout(function () {
       invoke('check_launcher_update', null, 40000).then(function (notice) {
         if (!notice || !notice.version) return;

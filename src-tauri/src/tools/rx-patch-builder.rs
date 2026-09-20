@@ -1,5 +1,5 @@
-// Keep release-only binaries outside src/bin; Tauri auto-discovers binaries
-// there for application bundles.
+// Release-only binaries live under src/tools because Tauri auto-discovers
+// binaries under src/bin for application bundles.
 use rx_launcher_lib::exe_patch::{apply_patch_bytes, build_patch, parse_patch};
 use sha2::{Digest, Sha256};
 use std::env;

@@ -1542,7 +1542,8 @@ fn read_installed_addons(
     let manifest: InstalledAddonsManifest = match serde_json::from_str(&text) {
         Ok(manifest) => manifest,
         Err(_) => {
-            // Legacy or malformed tracking is non-authoritative; do not touch files based on it.
+            // Legacy or malformed tracking is non-authoritative, so file
+            // operations never rely on it.
             return Ok(None);
         }
     };
@@ -2022,7 +2023,8 @@ fn install_staged_addons(
     let mut moved_addons: Vec<(String, PathBuf)> = Vec::new();
 
     let result = (|| {
-        // Stage launcher-owned directories before mutation so later changes can roll back.
+        // Launcher-owned directories are staged before mutation so failures
+        // remain recoverable.
         for addon in &old.addons {
             let current = addons_dir.join(&addon.name);
             match fs::symlink_metadata(&current) {
@@ -2059,8 +2061,8 @@ fn install_staged_addons(
             }
         }
 
-        // The legacy manifest did not contain file hashes. Preserve active
-        // legacy folders separately; comparing them to the new release would
+        // The legacy manifest did not contain file hashes. Active legacy
+        // folders remain separate; comparing them to the new release would
         // mistake ordinary release changes for user edits and overwrite the
         // original user backup.
         if let Some(legacy) = &legacy_addons {
@@ -2097,7 +2099,7 @@ fn install_staged_addons(
             }
         }
 
-        // Restore backups for addons no longer shipped; user content must survive
+        // Backups for addons no longer shipped restore user content during
         // patch removal.
         for addon in old
             .addons
@@ -2135,9 +2137,9 @@ fn install_staged_addons(
             } else if let Some(entry) = old_entry {
                 entry.backup_name.clone()
             } else if let Some(metadata) = current_metadata {
-                // Preserve a pre-existing user addon folder across install
-                // and uninstall. The backup is recorded only after the new
-                // signed addon has been installed successfully.
+                // A pre-existing user addon folder survives installation and
+                // uninstall; its backup is recorded only after the signed
+                // addon has been installed successfully.
                 if is_link_or_reparse_point(&metadata) || !metadata.is_dir() {
                     return Err(format!("Could not prepare addon {name} for replacement"));
                 }
@@ -2470,8 +2472,8 @@ async fn uninstall_patch(
             save_installed_content(&app, &content_manifest)?;
         }
     } else {
-        // Without authenticated per-installation tracking, preserve every
-        // content file rather than guessing ownership from a fixed filename.
+        // Without authenticated per-installation tracking, every content file
+        // is preserved rather than assigning ownership from a fixed filename.
     }
 
     let addons_dir = dir.join("Interface").join("AddOns");
@@ -2587,7 +2589,7 @@ async fn verify_patch(
     let manifest = fetch_content_manifest(&app, &http.0).await?;
     let installed_addons = read_installed_addons(&app, &dir)?;
 
-    // Run hashing on a blocking thread to avoid stalling the async runtime
+    // Hashing runs on a blocking thread so the async runtime remains responsive.
     tauri::async_runtime::spawn_blocking(move || {
         verify_patch_files(&dir, &manifest, installed_addons.as_ref())
     })
@@ -2648,8 +2650,8 @@ fn patch_realmlist_inner(game_path: String) -> Result<String, String> {
             write_file_atomically(&realmlist_path, REALMLIST_VALUE.as_bytes(), "realmlist")?;
             patched = true;
         } else if create_in.is_none() && locale_dir.is_dir() {
-            // Prefer an existing locale directory when the file itself is
-            // missing; this matches the normal WoW installation layout.
+            // An existing locale directory takes precedence when the file is
+            // missing, matching the normal WoW installation layout.
             ensure_safe_path_components(&locale_dir)?;
             create_in = Some(locale_dir);
         }
@@ -2659,8 +2661,8 @@ fn patch_realmlist_inner(game_path: String) -> Result<String, String> {
         Ok("Realmlist set successfully".into())
     } else {
         // A valid WoW installation can have the locale directory without a
-        // realmlist file. Create it in the first supported locale, defaulting
-        // to enUS when neither locale directory exists yet.
+        // realmlist file. The file is created in the first supported locale,
+        // defaulting to enUS when neither locale directory exists.
         let locale_dir = create_in.unwrap_or_else(|| base.join("enUS"));
         fs::create_dir_all(&locale_dir)
             .map_err(|_| "Failed to create realmlist directory".to_string())?;
@@ -2706,8 +2708,8 @@ fn open_url(url: String) -> Result<(), String> {
         return Err("Only allowlisted Project Rx HTTPS URLs may be opened".into());
     }
 
-    // Use ShellExecuteW via the `open` crate — no cmd.exe shell parsing,
-    // so URL path/query/fragment cannot inject commands.
+    // The `open` crate uses ShellExecuteW without cmd.exe shell parsing, so
+    // URL path, query, and fragment data cannot inject commands.
     open::that(parsed.as_str()).map_err(|_| "Failed to open URL".to_string())?;
 
     Ok(())
@@ -2756,9 +2758,8 @@ pub fn run() {
             }
         })
         .setup(|app| {
-            // Create the app config directory before the frontend uses the
-            // scoped filesystem plugin. The plugin cannot authorize a
-            // nonexistent base directory for the first settings write.
+            // The scoped filesystem plugin requires the AppConfig directory
+            // to exist before it can authorize the first settings write.
             let app_config_dir = app.path().app_config_dir()?;
             fs::create_dir_all(&app_config_dir)?;
 
@@ -2891,8 +2892,8 @@ mod tests {
         let operations = OperationLock::default();
         tauri::async_runtime::block_on(async {
             let active = operations.try_acquire().await.unwrap();
-            // This is the updater's before-exit transition. It must close
-            // admission before the updater releases its operation guard.
+            // The updater invokes this transition while holding its operation
+            // guard; shutdown admission closes before that guard is released.
             operations.permit_exit();
             assert!(operations.try_acquire().await.is_err());
             drop(active);
