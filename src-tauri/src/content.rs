@@ -253,7 +253,7 @@ pub fn validate_relative_content_path(value: &str) -> Result<(), String> {
     }
     for component in path.components() {
         match component {
-            Component::Normal(_) => {}
+            Component::Normal(value) => validate_windows_component(&value.to_string_lossy())?,
             _ => return Err(format!("Content path is not safe: {value}")),
         }
     }
@@ -263,6 +263,57 @@ pub fn validate_relative_content_path(value: &str) -> Result<(), String> {
             || name.to_ascii_lowercase().ends_with(".exe")
     }) {
         return Err("Content manifests cannot target an executable".into());
+    }
+    Ok(())
+}
+
+/// Windows strips trailing dots and spaces from ordinary file names and
+/// reserves several device names even when an extension is present. Reject
+/// these spellings on every platform so a signed manifest has one unambiguous
+/// destination on Windows and Linux.
+pub fn validate_windows_component(value: &str) -> Result<(), String> {
+    if value.is_empty()
+        || value == "."
+        || value == ".."
+        || value.contains('/')
+        || value.contains('\\')
+        || value.contains(':')
+        || value.ends_with('.')
+        || value.ends_with(' ')
+    {
+        return Err(format!("Path component is not safe: {value}"));
+    }
+
+    let device_name = value.split('.').next().unwrap_or(value);
+    let is_reserved = matches!(
+        device_name.to_ascii_uppercase().as_str(),
+        "CON"
+            | "PRN"
+            | "AUX"
+            | "NUL"
+            | "COM1"
+            | "COM2"
+            | "COM3"
+            | "COM4"
+            | "COM5"
+            | "COM6"
+            | "COM7"
+            | "COM8"
+            | "COM9"
+            | "LPT1"
+            | "LPT2"
+            | "LPT3"
+            | "LPT4"
+            | "LPT5"
+            | "LPT6"
+            | "LPT7"
+            | "LPT8"
+            | "LPT9"
+    );
+    if is_reserved {
+        return Err(format!(
+            "Path component uses a reserved Windows name: {value}"
+        ));
     }
     Ok(())
 }
@@ -368,8 +419,11 @@ mod tests {
             "/file",
             "C:file",
             "Wow.exe",
+            "Wow.exe.",
+            "Wow.exe ",
             "rx-wow.exe",
             "Data/helper.exe",
+            "Data/CON.txt",
         ] {
             assert!(validate_relative_content_path(path).is_err(), "{path}");
         }

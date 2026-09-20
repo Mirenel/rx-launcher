@@ -33,7 +33,7 @@ window.addEventListener("DOMContentLoaded", function () {
   var BaseDir = tauriFs.BaseDirectory;
 
   var SETTINGS_FILE = 'settings.json';
-  var settings = { game_path: null, wine_prefix: null, installed_patch_version: null, keep_open: false, minimize_to_tray: false, last_news_date: null };
+  var settings = { game_path: null, wine_prefix: null, installed_patch_version: null, installed_patch_path: null, keep_open: false, minimize_to_tray: false, last_news_date: null };
   var config = null;
   var settingsSaveQueue = Promise.resolve();
 
@@ -47,6 +47,7 @@ window.addEventListener("DOMContentLoaded", function () {
             if (typeof parsed.game_path === 'string') settings.game_path = parsed.game_path;
             if (typeof parsed.wine_prefix === 'string' && parsed.wine_prefix.length > 0) settings.wine_prefix = parsed.wine_prefix;
             if (typeof parsed.installed_patch_version === 'string') settings.installed_patch_version = parsed.installed_patch_version;
+            if (typeof parsed.installed_patch_path === 'string') settings.installed_patch_path = parsed.installed_patch_path;
             if (typeof parsed.keep_open === 'boolean') settings.keep_open = parsed.keep_open;
             if (typeof parsed.minimize_to_tray === 'boolean') settings.minimize_to_tray = parsed.minimize_to_tray;
             if (typeof parsed.last_news_date === 'string') settings.last_news_date = parsed.last_news_date;
@@ -166,6 +167,7 @@ window.addEventListener("DOMContentLoaded", function () {
   var patchProgressFill = document.getElementById('patch-progress-fill');
   var patchProgressText = document.getElementById('patch-progress-text');
   var gamePathInput = document.getElementById('game-path');
+  var browseBtn = document.getElementById('browse-btn');
   var winePrefixSetting = document.getElementById('wine-prefix-setting');
   var winePrefixInput = document.getElementById('wine-prefix');
   var winePrefixStatus = document.getElementById('wine-prefix-status');
@@ -186,6 +188,7 @@ window.addEventListener("DOMContentLoaded", function () {
   var updateSkip = document.getElementById('update-skip');
   var updateDownload = document.getElementById('update-download');
   var updateFromPlay = false;
+  var updateGamePath = null;
   var launcherUpdateModal = document.getElementById('launcher-update-modal');
   var launcherUpdateModalBody = document.getElementById('launcher-update-modal-body');
   var launcherUpdateSkip = document.getElementById('launcher-update-skip');
@@ -241,6 +244,43 @@ window.addEventListener("DOMContentLoaded", function () {
   var patchInstalled = false;
   var patchOutdated = false;
   var patchManifestReady = false;
+  var gameOperationActive = false;
+
+  function setGameOperationActive(active) {
+    gameOperationActive = active;
+    browseBtn.disabled = active;
+    patchBtn.disabled = active || !hasGamePath;
+    downloadBtn.disabled = active || !patchManifestReady || !hasGamePath || downloading;
+    playBtn.disabled = active || !hasGamePath || !runtimeReady || downloading;
+  }
+
+  function sameGamePath(left, right) {
+    if (typeof left !== 'string' || typeof right !== 'string') return false;
+    var normalizedLeft = left.replace(/[\\/]+/g, '/').replace(/\/$/, '');
+    var normalizedRight = right.replace(/[\\/]+/g, '/').replace(/\/$/, '');
+    if (/^[A-Za-z]:\//.test(normalizedLeft) && /^[A-Za-z]:\//.test(normalizedRight)) {
+      return normalizedLeft.toLowerCase() === normalizedRight.toLowerCase();
+    }
+    return normalizedLeft === normalizedRight;
+  }
+
+  function installedPatchVersionFor(path) {
+    return settings.installed_patch_path && sameGamePath(settings.installed_patch_path, path)
+      ? settings.installed_patch_version
+      : null;
+  }
+
+  function setInstalledPatchVersion(path, version) {
+    settings.installed_patch_path = path;
+    settings.installed_patch_version = version;
+  }
+
+  function clearInstalledPatchVersion(path) {
+    if (sameGamePath(settings.installed_patch_path, path)) {
+      settings.installed_patch_path = null;
+      settings.installed_patch_version = null;
+    }
+  }
 
   discordBtn.classList.remove('hidden');
 
@@ -444,7 +484,7 @@ window.addEventListener("DOMContentLoaded", function () {
   }
 
   function updatePlayButtonState() {
-    playBtn.disabled = !hasGamePath || !runtimeReady || downloading;
+    playBtn.disabled = !hasGamePath || !runtimeReady || downloading || gameOperationActive;
   }
 
   function checkGameRuntime() {
@@ -514,7 +554,7 @@ window.addEventListener("DOMContentLoaded", function () {
     if (!config) return;
 
     var currentVersion = config.patch_version;
-    var installedVersion = settings.installed_patch_version;
+    var installedVersion = installedPatchVersionFor(settings.game_path);
 
     patchCurrentEl.textContent = patchManifestReady ? currentVersion : 'Unavailable';
     downloadBtn.disabled = !patchManifestReady || !hasGamePath || downloading;
@@ -657,7 +697,10 @@ window.addEventListener("DOMContentLoaded", function () {
     if (!hasGamePath) return;
     if (downloading) return;
     if (!force && downloadBtn.disabled) return;
+    var gamePath = settings.game_path;
+    if (!gamePath) return;
     downloading = true;
+    setGameOperationActive(true);
     downloadBtn.disabled = true;
     repairBtn.disabled = true;
     playBtn.disabled = true;
@@ -693,24 +736,25 @@ window.addEventListener("DOMContentLoaded", function () {
       patchLogLine(force ? 'Verifying and re-installing Project Rx content...' : 'Preparing Project Rx content...');
       // Patch mutations deliberately have no UI timeout: the backend may still be
       // writing files, and allowing a retry would start a concurrent mutation.
-      return invoke('download_patch', { gamePath: settings.game_path, repair: !!force });
+      return invoke('download_patch', { gamePath: gamePath, repair: !!force });
     }).then(function (version) {
       setProgress(96);
       patchLogLine('All content prepared and installed!', 'log-ok');
-      settings.installed_patch_version = version;
+      setInstalledPatchVersion(gamePath, version);
       return saveSettings();
     }).then(function () {
       setProgress(100);
       patchLogLine(label + ' complete!', 'log-ok');
       repairBtn.disabled = false;
       downloading = false;
+      setGameOperationActive(false);
       updatePlayButtonState();
       updatePatchDisplay();
       checkGameDirectory();
       // Do not overwrite a user's custom realmlist; only fill in a missing value.
-      invoke('check_realmlist', { gamePath: settings.game_path }).catch(function (e) {
+      invoke('check_realmlist', { gamePath: gamePath }).catch(function (e) {
         if (String(e).indexOf('not found') !== -1) {
-          return invoke('patch_realmlist', { gamePath: settings.game_path }).then(function () {
+          return invoke('patch_realmlist', { gamePath: gamePath }).then(function () {
             patchLogLine('Realmlist set to projectrx.net', 'log-ok');
             checkRealmlist();
           });
@@ -729,6 +773,7 @@ window.addEventListener("DOMContentLoaded", function () {
       downloadBtn.disabled = false;
       repairBtn.disabled = false;
       downloading = false;
+      setGameOperationActive(false);
       updatePlayButtonState();
       updatePatchDisplay();
       checkGameDirectory();
@@ -758,7 +803,8 @@ window.addEventListener("DOMContentLoaded", function () {
     startPatchDownload(true);
   });
 
-  document.getElementById('browse-btn').addEventListener('click', function () {
+  browseBtn.addEventListener('click', function () {
+    if (gameOperationActive) return;
     tauriDialog.open({
       multiple: false,
       directory: true,
@@ -823,9 +869,11 @@ window.addEventListener("DOMContentLoaded", function () {
   }
 
   patchBtn.addEventListener('click', function () {
-    if (!settings.game_path || patchBtn.disabled) return;
+    if (!settings.game_path || patchBtn.disabled || gameOperationActive) return;
+    var gamePath = settings.game_path;
+    setGameOperationActive(true);
     patchBtn.disabled = true;
-    invoke('patch_realmlist', { gamePath: settings.game_path }).then(function (result) {
+    invoke('patch_realmlist', { gamePath: gamePath }).then(function (result) {
       realmlistStatus.textContent = result;
       realmlistStatus.className = 'setting-value ok';
       showToast('Realmlist updated');
@@ -834,6 +882,7 @@ window.addEventListener("DOMContentLoaded", function () {
       realmlistStatus.className = 'setting-value err';
     }).finally(function () {
       patchBtn.disabled = false;
+      setGameOperationActive(false);
     });
   });
 
@@ -903,12 +952,14 @@ window.addEventListener("DOMContentLoaded", function () {
     hideModal(patchModal);
     modalRepair.classList.add('hidden');
     pendingLaunchAction = null;
+    setGameOperationActive(false);
   });
   patchModal.addEventListener('click', function (e) {
     if (e.target === patchModal) {
       hideModal(patchModal);
       modalRepair.classList.add('hidden');
       pendingLaunchAction = null;
+      setGameOperationActive(false);
     }
   });
 
@@ -916,6 +967,7 @@ window.addEventListener("DOMContentLoaded", function () {
     hideModal(patchModal);
     modalRepair.classList.add('hidden');
     pendingLaunchAction = null;
+    setGameOperationActive(false);
     startPatchDownload(true);
   });
 
@@ -941,23 +993,29 @@ window.addEventListener("DOMContentLoaded", function () {
         if (modals[i] === patchModal) {
           modalRepair.classList.add('hidden');
           pendingLaunchAction = null;
+          setGameOperationActive(false);
         }
-        if (modals[i] === updateModal) updateFromPlay = false;
+        if (modals[i] === updateModal) {
+          updateFromPlay = false;
+          updateGamePath = null;
+          setGameOperationActive(false);
+        }
         return;
       }
     }
   });
 
-  function doLaunch() {
+  function doLaunch(gamePath) {
     // Finish any queued checkbox/settings write before exiting or hiding the
     // launcher. Otherwise the process can terminate before the new choice is
     // persisted.
     saveSettings().catch(function () {}).then(function () {
       return invoke('launch_game', {
-        gamePath: settings.game_path,
+        gamePath: gamePath,
         winePrefix: settings.wine_prefix || null
       });
     }).then(function () {
+      setGameOperationActive(false);
       if (!settings.keep_open) {
         tauriProcess.exit(0).catch(function () {
           showToast('Could not close the launcher');
@@ -970,6 +1028,7 @@ window.addEventListener("DOMContentLoaded", function () {
         showToast('Game launched');
       }
     }).catch(function (e) {
+      setGameOperationActive(false);
       var message = String(e);
       modalWarnTitle.textContent = 'Launch Failed';
       modalWarnBody.textContent = message.indexOf('rx-wow.exe not found') !== -1
@@ -990,9 +1049,9 @@ window.addEventListener("DOMContentLoaded", function () {
     });
   }
 
-  function launchGame() {
-    invoke('check_realmlist', { gamePath: settings.game_path }).then(function () {
-      doLaunch();
+  function launchGame(gamePath) {
+    invoke('check_realmlist', { gamePath: gamePath }).then(function () {
+      doLaunch(gamePath);
     }).catch(function (e) {
       var msg = String(e);
       var body;
@@ -1009,7 +1068,7 @@ window.addEventListener("DOMContentLoaded", function () {
       modalRepair.classList.add('hidden');
       modalConfirm.classList.remove('hidden');
       modalCancel.textContent = 'Cancel';
-      pendingLaunchAction = doLaunch;
+      pendingLaunchAction = function () { doLaunch(gamePath); };
       showModal(patchModal);
     });
   }
@@ -1026,21 +1085,28 @@ window.addEventListener("DOMContentLoaded", function () {
 
   updateSkip.addEventListener('click', function () {
     var shouldLaunch = updateFromPlay;
+    var gamePath = updateGamePath;
     updateFromPlay = false;
+    updateGamePath = null;
     hideModal(updateModal);
-    if (shouldLaunch) launchGame();
+    if (shouldLaunch && gamePath) launchGame(gamePath);
+    else setGameOperationActive(false);
   });
 
   updateModal.addEventListener('click', function (e) {
     if (e.target === updateModal) {
       hideModal(updateModal);
       updateFromPlay = false;
+      updateGamePath = null;
+      setGameOperationActive(false);
     }
   });
 
   updateDownload.addEventListener('click', function () {
     updateFromPlay = false;
+    updateGamePath = null;
     hideModal(updateModal);
+    setGameOperationActive(false);
     switchToTab('patch');
     downloadBtn.click();
   });
@@ -1158,13 +1224,16 @@ window.addEventListener("DOMContentLoaded", function () {
   });
 
   uninstallBtn.addEventListener('click', function () {
-    if (!hasGamePath || downloading) return;
+    if (!hasGamePath || downloading || gameOperationActive) return;
     uninstallBody.textContent = 'This will remove all Project Rx patches and addons. Your other game files will not be affected.';
     uninstallWarn.classList.add('hidden');
     showModal(uninstallModal);
   });
 
   uninstallConfirm.addEventListener('click', function () {
+    var gamePath = settings.game_path;
+    if (!gamePath || gameOperationActive) return;
+    setGameOperationActive(true);
     hideModal(uninstallModal);
     uninstallBtn.classList.add('hidden');
     repairBtn.classList.add('hidden');
@@ -1172,16 +1241,18 @@ window.addEventListener("DOMContentLoaded", function () {
     patchLog.classList.add('visible');
     patchLogLine('Uninstalling Project Rx content...');
 
-    invoke('uninstall_patch', { gamePath: settings.game_path }).then(function (msg) {
+    invoke('uninstall_patch', { gamePath: gamePath }).then(function (msg) {
       patchLogLine(msg, 'log-ok');
-      settings.installed_patch_version = null;
+      clearInstalledPatchVersion(gamePath);
       return saveSettings();
     }).then(function () {
       patchLogLine('Uninstall complete.', 'log-ok');
+      setGameOperationActive(false);
       updatePatchDisplay();
       checkGameDirectory();
     }).catch(function (e) {
       patchLogLine('Error: ' + (e || 'uninstall failed'), 'log-warn');
+      setGameOperationActive(false);
       uninstallBtn.classList.remove('hidden');
       repairBtn.classList.remove('hidden');
     });
@@ -1192,26 +1263,32 @@ window.addEventListener("DOMContentLoaded", function () {
       runtimeWarnBanner.classList.remove('hidden');
       return;
     }
+    var gamePath = settings.game_path;
+    if (!gamePath || gameOperationActive) return;
     if (!patchInstalled) {
+      setGameOperationActive(true);
       modalWarnTitle.textContent = 'Patch Not Installed';
       modalWarnBody.textContent = 'The Project Rx patch is not installed. You may experience issues without it.';
       modalWarnQuestion.classList.remove('hidden');
       modalRepair.classList.remove('hidden');
       modalConfirm.classList.remove('hidden');
       modalCancel.textContent = 'Cancel';
-      pendingLaunchAction = launchGame;
+      pendingLaunchAction = function () { launchGame(gamePath); };
       showModal(patchModal);
       return;
     }
     if (patchOutdated) {
       updateFromPlay = true;
-      updateModalBody.textContent = 'Your patch (' + settings.installed_patch_version + ') is outdated. Server requires ' + config.patch_version + '. Update now?';
+      updateGamePath = gamePath;
+      setGameOperationActive(true);
+      updateModalBody.textContent = 'Your patch (' + installedPatchVersionFor(gamePath) + ') is outdated. Server requires ' + config.patch_version + '. Update now?';
       showModal(updateModal);
       return;
     }
+    setGameOperationActive(true);
     playBtn.disabled = true;
     playBtnText.textContent = 'Verifying...';
-    invoke('verify_patch', { gamePath: settings.game_path }, 30000).then(function (bad) {
+    invoke('verify_patch', { gamePath: gamePath }, 30000).then(function (bad) {
       updatePlayButtonState();
       playBtnText.textContent = 'Play';
       if (bad.length > 0) {
@@ -1221,12 +1298,13 @@ window.addEventListener("DOMContentLoaded", function () {
         modalRepair.classList.remove('hidden');
         modalConfirm.classList.remove('hidden');
         modalCancel.textContent = 'Cancel';
-        pendingLaunchAction = launchGame;
+        pendingLaunchAction = function () { launchGame(gamePath); };
         showModal(patchModal);
       } else {
-        launchGame();
+        launchGame(gamePath);
       }
     }).catch(function (e) {
+      setGameOperationActive(false);
       updatePlayButtonState();
       playBtnText.textContent = 'Play';
       modalWarnTitle.textContent = 'Verification Unavailable';
@@ -1235,7 +1313,7 @@ window.addEventListener("DOMContentLoaded", function () {
       modalRepair.classList.remove('hidden');
       modalConfirm.classList.remove('hidden');
       modalCancel.textContent = 'Cancel';
-      pendingLaunchAction = launchGame;
+      pendingLaunchAction = function () { launchGame(gamePath); };
       showModal(patchModal);
     });
   }
@@ -1261,7 +1339,9 @@ window.addEventListener("DOMContentLoaded", function () {
           checkRealmlist();
           if (patchOutdated) {
             updateFromPlay = false;
-            updateModalBody.textContent = 'A new patch version is available (' + config.patch_version + '). You currently have ' + settings.installed_patch_version + ' installed. Would you like to download it?';
+            updateGamePath = settings.game_path;
+            setGameOperationActive(true);
+            updateModalBody.textContent = 'A new patch version is available (' + config.patch_version + '). You currently have ' + (installedPatchVersionFor(settings.game_path) || 'an older version') + ' installed. Would you like to download it?';
             showModal(updateModal);
           }
         }
@@ -1285,7 +1365,9 @@ window.addEventListener("DOMContentLoaded", function () {
       updatePatchDisplay();
       if (settings.game_path && hasGamePath && patchOutdated) {
         updateFromPlay = false;
-        updateModalBody.textContent = 'A new patch version is available (' + config.patch_version + '). You currently have ' + settings.installed_patch_version + ' installed. Would you like to download it?';
+        updateGamePath = settings.game_path;
+        setGameOperationActive(true);
+        updateModalBody.textContent = 'A new patch version is available (' + config.patch_version + '). You currently have ' + (installedPatchVersionFor(settings.game_path) || 'an older version') + ' installed. Would you like to download it?';
         showModal(updateModal);
       }
     }).catch(function () {

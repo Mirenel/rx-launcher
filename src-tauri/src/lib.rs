@@ -26,17 +26,18 @@ const SERVER_HOST: &str = "projectrx.net";
 const SERVER_PORT: u16 = 3724;
 const REALM_STATUS_URL: &str = "https://projectrx.net/api/realm-status/public";
 const REALM_STATUS_MAX_BYTES: usize = 16 * 1024;
+const HTTP_ALLOWED_DOMAINS: &[&str] = &[
+    "projectrx.net",
+    "www.projectrx.net",
+    "github.com",
+    "objects.githubusercontent.com",
+    "release-assets.githubusercontent.com",
+];
 const PATCH_DOWNLOAD_MAX_BYTES: u64 = 512 * 1024 * 1024;
 const ADDONS_EXTRACT_MAX_BYTES: u64 = 256 * 1024 * 1024;
 const ADDONS_MAX_ENTRIES: usize = 10_000;
 const CONTENT_CACHE_FILENAME: &str = "content-manifest.json";
 const INSTALLED_CONTENT_FILENAME: &str = "installed_content.json";
-const LEGACY_PATCH_PATHS: &[&str] = &[
-    "Data/patch-7.MPQ",
-    "Data/patch-A.MPQ",
-    "Data/patch-B.MPQ",
-    "Data/patch-D.MPQ",
-];
 
 struct HttpClient(reqwest::Client);
 
@@ -53,13 +54,56 @@ fn validate_game_path(raw: &str) -> Result<PathBuf, String> {
         if matches!(component, Component::ParentDir) {
             return Err("Invalid game directory".into());
         }
+        if let Component::Normal(value) = component {
+            content::validate_windows_component(&value.to_string_lossy())
+                .map_err(|_| "Game directory path contains an unsafe Windows name".to_string())?;
+        }
     }
 
     if !path.is_dir() {
         return Err("Game directory not found".into());
     }
 
+    if path_contains_link_or_reparse_point(&path)? {
+        return Err("Game directory cannot contain symbolic links or reparse points".into());
+    }
+
     Ok(path)
+}
+
+fn is_link_or_reparse_point(metadata: &fs::Metadata) -> bool {
+    let is_link = metadata.file_type().is_symlink();
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+
+        return is_link || metadata.file_attributes() & 0x400 != 0;
+    }
+    #[cfg(not(windows))]
+    {
+        is_link
+    }
+}
+
+fn path_contains_link_or_reparse_point(path: &Path) -> Result<bool, String> {
+    let mut current = PathBuf::new();
+    for component in path.components() {
+        current.push(component.as_os_str());
+        match fs::symlink_metadata(&current) {
+            Ok(metadata) if is_link_or_reparse_point(&metadata) => return Ok(true),
+            Ok(_) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => break,
+            Err(_) => return Err("Could not inspect game directory".into()),
+        }
+    }
+    Ok(false)
+}
+
+fn ensure_safe_path_components(path: &Path) -> Result<(), String> {
+    if path_contains_link_or_reparse_point(path)? {
+        return Err("Game file path contains a symbolic link or reparse point".into());
+    }
+    Ok(())
 }
 
 #[derive(Serialize)]
@@ -126,11 +170,15 @@ async fn check_game_runtime(wine_prefix: Option<String>) -> runtime::GameRuntime
 #[tauri::command]
 fn check_game_directory(game_path: String) -> Result<GameDirectoryStatus, String> {
     let dir = validate_game_path(&game_path)?;
+    let wow = dir.join("Wow.exe");
+    let data = dir.join("Data");
+    let addons = dir.join("Interface").join("AddOns");
+    let rx_wow = dir.join("rx-wow.exe");
     Ok(GameDirectoryStatus {
-        has_wow: dir.join("Wow.exe").is_file(),
-        has_data: dir.join("Data").is_dir(),
-        has_addons: dir.join("Interface").join("AddOns").is_dir(),
-        has_rx_wow: dir.join("rx-wow.exe").is_file(),
+        has_wow: wow.is_file() && ensure_safe_path_components(&wow).is_ok(),
+        has_data: data.is_dir() && ensure_safe_path_components(&data).is_ok(),
+        has_addons: addons.is_dir() && ensure_safe_path_components(&addons).is_ok(),
+        has_rx_wow: rx_wow.is_file() && ensure_safe_path_components(&rx_wow).is_ok(),
     })
 }
 
@@ -371,12 +419,40 @@ async fn get_changelog(http: tauri::State<'_, HttpClient>) -> Result<Vec<Changel
 }
 
 #[tauri::command]
-fn launch_game(game_path: String, wine_prefix: Option<String>) -> Result<(), String> {
+async fn launch_game(
+    app: tauri::AppHandle,
+    http: tauri::State<'_, HttpClient>,
+    game_path: String,
+    wine_prefix: Option<String>,
+) -> Result<(), String> {
     let dir = validate_game_path(&game_path)?;
     let wow_exe = dir.join("rx-wow.exe");
+    ensure_safe_path_components(&wow_exe)?;
 
-    if !wow_exe.exists() {
-        return Err("rx-wow.exe not found. Patch the game before launching.".into());
+    let metadata = fs::symlink_metadata(&wow_exe).map_err(|error| {
+        if error.kind() == std::io::ErrorKind::NotFound {
+            "rx-wow.exe not found. Patch the game before launching.".to_string()
+        } else {
+            "Could not inspect rx-wow.exe.".to_string()
+        }
+    })?;
+    if !metadata.is_file() {
+        return Err("rx-wow.exe is not a regular file.".into());
+    }
+
+    let manifest = fetch_content_manifest(&app, &http.0).await?;
+    let installed_addons = read_installed_addons(&app, &dir)?;
+    let verify_dir = dir.clone();
+    let bad = tauri::async_runtime::spawn_blocking(move || {
+        verify_patch_files(&verify_dir, &manifest, installed_addons.as_ref())
+    })
+    .await
+    .map_err(|_| "Could not verify the game before launching".to_string())?;
+    if !bad.is_empty() {
+        return Err(format!(
+            "Game integrity verification failed: {}",
+            bad.join(", ")
+        ));
     }
 
     runtime::launch(&wow_exe, &dir, wine_prefix.as_deref())
@@ -396,7 +472,21 @@ struct DownloadProgress {
 /// recoverable on Windows, where renaming over an existing file is not
 /// consistently supported.
 fn replace_verified_file(part: &Path, destination: &Path, label: &str) -> Result<(), String> {
-    if destination.exists() && !destination.is_file() {
+    ensure_safe_path_components(destination)?;
+    ensure_safe_path_components(part)?;
+    let destination_metadata = fs::symlink_metadata(destination).ok();
+    if destination_metadata
+        .as_ref()
+        .is_some_and(is_link_or_reparse_point)
+    {
+        return Err(format!(
+            "Cannot replace {label}: the destination is a symbolic link or reparse point"
+        ));
+    }
+    if destination_metadata
+        .as_ref()
+        .is_some_and(|metadata| !metadata.is_file())
+    {
         return Err(format!(
             "Cannot replace {label}: the destination is not a file"
         ));
@@ -409,12 +499,12 @@ fn replace_verified_file(part: &Path, destination: &Path, label: &str) -> Result
             .unwrap_or("file"),
         std::process::id()
     ));
-    if backup.exists() {
+    if fs::symlink_metadata(&backup).is_ok() {
         return Err(format!(
             "Cannot replace {label}: a previous replacement is incomplete"
         ));
     }
-    let had_destination = destination.exists();
+    let had_destination = destination_metadata.is_some();
     if had_destination {
         fs::rename(destination, &backup)
             .map_err(|_| format!("Could not prepare {label} for replacement"))?;
@@ -430,6 +520,37 @@ fn replace_verified_file(part: &Path, destination: &Path, label: &str) -> Result
         // this private rollback copy is harmless and avoids reporting a false
         // install failure after a successful replacement.
         fs::remove_file(&backup).ok();
+    }
+    Ok(())
+}
+
+fn write_file_atomically(destination: &Path, bytes: &[u8], label: &str) -> Result<(), String> {
+    ensure_safe_path_components(destination)?;
+    if let Some(parent) = destination.parent() {
+        fs::create_dir_all(parent)
+            .map_err(|_| format!("Could not create the directory for {label}"))?;
+    }
+    ensure_safe_path_components(destination)?;
+
+    let name = destination
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or("file");
+    let temp = destination.with_file_name(format!(".{name}.rx-write-{}", std::process::id()));
+    let mut file = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&temp)
+        .map_err(|_| format!("Could not create the temporary file for {label}"))?;
+    if let Err(error) = file.write_all(bytes).and_then(|_| file.sync_all()) {
+        drop(file);
+        fs::remove_file(&temp).ok();
+        return Err(format!("Could not save {label}: {error}"));
+    }
+    drop(file);
+    if let Err(error) = replace_verified_file(&temp, destination, label) {
+        fs::remove_file(&temp).ok();
+        return Err(error);
     }
     Ok(())
 }
@@ -468,16 +589,18 @@ fn resolve_content_path(game_dir: &Path, relative: &str) -> Result<PathBuf, Stri
     let mut resolved = game_dir.to_path_buf();
     for component in relative.split('/') {
         resolved.push(component);
-        if let Ok(metadata) = fs::symlink_metadata(&resolved) {
-            if metadata.file_type().is_symlink() {
-                return Err(format!("Content path contains a symbolic link: {relative}"));
-            }
-        }
+        ensure_safe_path_components(&resolved)
+            .map_err(|_| format!("Content path contains a link or reparse point: {relative}"))?;
     }
     Ok(resolved)
 }
 
 fn file_hash_and_size(path: &Path) -> Result<(u64, String), String> {
+    let link_metadata =
+        fs::symlink_metadata(path).map_err(|_| "Could not read the game executable".to_string())?;
+    if is_link_or_reparse_point(&link_metadata) {
+        return Err("The game file cannot be a symbolic link or reparse point".into());
+    }
     let metadata =
         fs::metadata(path).map_err(|_| "Could not read the game executable".to_string())?;
     if !metadata.is_file() {
@@ -530,6 +653,7 @@ async fn download_verified_asset(
     if expected_size == 0 || expected_size > PATCH_DOWNLOAD_MAX_BYTES {
         return Err(format!("{label} has an invalid permitted size"));
     }
+    ensure_safe_path_components(part_path)?;
     if part_path.exists() {
         fs::remove_file(part_path)
             .map_err(|_| format!("Could not remove stale temporary file for {label}"))?;
@@ -564,13 +688,17 @@ async fn download_verified_asset(
         ));
     }
 
-    let mut file = fs::File::create(part_path).map_err(|error| {
-        if error.kind() == std::io::ErrorKind::PermissionDenied {
-            format!("Permission denied writing {label}. Check the game directory permissions.")
-        } else {
-            format!("Could not create the temporary file for {label}")
-        }
-    })?;
+    let mut file = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(part_path)
+        .map_err(|error| {
+            if error.kind() == std::io::ErrorKind::PermissionDenied {
+                format!("Permission denied writing {label}. Check the game directory permissions.")
+            } else {
+                format!("Could not create the temporary file for {label}")
+            }
+        })?;
     let mut downloaded = 0u64;
     let mut last_emit = 0u64;
     let mut stream = response.bytes_stream();
@@ -638,6 +766,8 @@ async fn prepare_rx_wow(
 ) -> Result<(), String> {
     let source = game_dir.join("Wow.exe");
     let output = game_dir.join("rx-wow.exe");
+    ensure_safe_path_components(&source)?;
+    ensure_safe_path_components(&output)?;
     let source_for_hash = source.clone();
     let source_info =
         tauri::async_runtime::spawn_blocking(move || file_hash_and_size(&source_for_hash))
@@ -702,6 +832,7 @@ async fn prepare_rx_wow(
         total,
     );
     let build_path = game_dir.join(format!(".rx-wow.exe.rx-build-{}", std::process::id()));
+    ensure_safe_path_components(&build_path)?;
     if build_path.exists() {
         fs::remove_file(&build_path)
             .map_err(|_| "Could not clear the previous executable build".to_string())?;
@@ -757,10 +888,10 @@ async fn download_patch(
     let data_dir = dir.join("Data");
     let addons_dir = dir.join("Interface").join("AddOns");
 
-    if !data_dir.is_dir() {
+    if !data_dir.is_dir() || ensure_safe_path_components(&data_dir).is_err() {
         return Err("Data folder not found. Make sure you selected a valid game directory.".into());
     }
-    if !addons_dir.is_dir() {
+    if !addons_dir.is_dir() || ensure_safe_path_components(&addons_dir).is_err() {
         return Err(
             "Interface/AddOns folder not found. Make sure you selected a valid game directory."
                 .into(),
@@ -824,12 +955,14 @@ async fn download_patch(
                 && previous_content.as_ref().is_some_and(|content| {
                     content.release == manifest.release && content.patch_version == manifest.version
                 })
-                && installed.as_ref().is_some_and(|manifest| {
-                    !manifest.addons.is_empty()
-                        && manifest
+                && installed.as_ref().is_some_and(|installed_manifest| {
+                    !installed_manifest.addons.is_empty()
+                        && installed_manifest
                             .addons
                             .iter()
-                            .all(|addon| addons_dir.join(&addon.name).is_dir())
+                            .all(|addon| addon_files_match(&addons_dir, addon))
+                        && installed_manifest.release == manifest.release
+                        && installed_manifest.patch_version == manifest.version
                 })
         } else {
             if final_path.exists() {
@@ -903,7 +1036,15 @@ async fn download_patch(
             }
             let install_result = (|| {
                 let addon_folders = extract_zip_file(&part_path, &stage)?;
-                install_staged_addons(&app, &dir, &addons_dir, &stage, &addon_folders)
+                install_staged_addons(
+                    &app,
+                    &dir,
+                    &addons_dir,
+                    &stage,
+                    &addon_folders,
+                    manifest.release,
+                    &manifest.version,
+                )
             })();
             fs::remove_dir_all(&stage).ok();
             fs::remove_file(&part_path).ok();
@@ -981,6 +1122,14 @@ fn extract_zip_file(zip_path: &Path, dest_dir: &Path) -> Result<Vec<String>, Str
             .enclosed_name()
             .ok_or_else(|| "Addons.zip contains an unsafe path".to_string())?
             .to_owned();
+        if name.to_string_lossy().contains('\\') {
+            return Err("Addons.zip contains an invalid path separator".into());
+        }
+        for component in name.components() {
+            if let Component::Normal(value) = component {
+                content::validate_windows_component(&value.to_string_lossy())?;
+            }
+        }
         if entry
             .unix_mode()
             .is_some_and(|mode| mode & 0o170000 == 0o120000)
@@ -1035,24 +1184,43 @@ fn extract_zip_file(zip_path: &Path, dest_dir: &Path) -> Result<Vec<String>, Str
     Ok(roots.into_iter().collect())
 }
 
+const INSTALLED_ADDONS_MANIFEST_VERSION: u32 = 2;
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+struct InstalledAddonFile {
+    path: String,
+    size: u64,
+    sha256: String,
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize)]
 struct InstalledAddon {
     name: String,
     backup_name: Option<String>,
+    files: Vec<InstalledAddonFile>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 struct InstalledAddonsManifest {
     version: u32,
     game_path: String,
+    release: u64,
+    patch_version: String,
     addons: Vec<InstalledAddon>,
 }
 
-fn installed_addons_path(app: &tauri::AppHandle) -> Option<PathBuf> {
+fn state_file_path(app: &tauri::AppHandle, prefix: &str, canonical_path: &str) -> Option<PathBuf> {
+    let mut hasher = Sha256::new();
+    hasher.update(canonical_path.as_bytes());
+    let key = format!("{:x}", hasher.finalize());
     app.path()
         .app_config_dir()
         .ok()
-        .map(|d| d.join("installed_addons.json"))
+        .map(|dir| dir.join(format!("{prefix}-{key}.json")))
+}
+
+fn installed_addons_path(app: &tauri::AppHandle, canonical_path: &str) -> Option<PathBuf> {
+    state_file_path(app, "installed-addons", canonical_path)
 }
 
 fn canonical_game_path(game_dir: &Path) -> Result<String, String> {
@@ -1064,7 +1232,7 @@ fn canonical_game_path(game_dir: &Path) -> Result<String, String> {
 }
 
 fn validate_addon_name(name: &str) -> bool {
-    !name.is_empty()
+    content::validate_windows_component(name).is_ok()
         && !name
             .chars()
             .any(|character| character == '/' || character == '\\')
@@ -1075,17 +1243,42 @@ fn validate_addon_name(name: &str) -> bool {
         )
 }
 
+fn validate_addon_file_path(path: &str) -> bool {
+    !path.is_empty()
+        && !path.starts_with('/')
+        && !path.contains('\\')
+        && path
+            .split('/')
+            .all(|component| content::validate_windows_component(component).is_ok())
+}
+
+fn addon_manifest_files_valid(files: &[InstalledAddonFile]) -> bool {
+    !files.is_empty()
+        && files.iter().all(|file| {
+            validate_addon_file_path(&file.path)
+                && file.sha256.len() == 64
+                && file.sha256.bytes().all(|byte| byte.is_ascii_hexdigit())
+        })
+        && files
+            .iter()
+            .enumerate()
+            .all(|(index, file)| files[..index].iter().all(|old| old.path != file.path))
+}
+
 fn manifest_matches_game(manifest: &InstalledAddonsManifest, canonical_path: &str) -> bool {
     let same_path = if cfg!(windows) {
         manifest.game_path.eq_ignore_ascii_case(canonical_path)
     } else {
         manifest.game_path == canonical_path
     };
-    manifest.version == 1
+    manifest.version == INSTALLED_ADDONS_MANIFEST_VERSION
         && same_path
+        && manifest.release > 0
+        && !manifest.patch_version.is_empty()
         && manifest.addons.iter().all(|addon| {
             validate_addon_name(&addon.name)
                 && addon.backup_name.as_deref().is_none_or(validate_addon_name)
+                && addon_manifest_files_valid(&addon.files)
         })
 }
 
@@ -1093,7 +1286,8 @@ fn read_installed_addons(
     app: &tauri::AppHandle,
     game_dir: &Path,
 ) -> Result<Option<InstalledAddonsManifest>, String> {
-    let Some(path) = installed_addons_path(app) else {
+    let canonical_path = canonical_game_path(game_dir)?;
+    let Some(path) = installed_addons_path(app, &canonical_path) else {
         return Ok(None);
     };
     let text = match fs::read_to_string(path) {
@@ -1108,7 +1302,7 @@ fn read_installed_addons(
             return Ok(None);
         }
     };
-    if !manifest_matches_game(&manifest, &canonical_game_path(game_dir)?) {
+    if !manifest_matches_game(&manifest, &canonical_path) {
         return Ok(None);
     }
     Ok(Some(manifest))
@@ -1118,7 +1312,8 @@ fn save_installed_addons(
     app: &tauri::AppHandle,
     manifest: &InstalledAddonsManifest,
 ) -> Result<(), String> {
-    let path = installed_addons_path(app).ok_or("Could not locate launcher data directory")?;
+    let path = installed_addons_path(app, &manifest.game_path)
+        .ok_or("Could not locate launcher data directory")?;
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)
             .map_err(|_| "Could not create launcher data directory".to_string())?;
@@ -1172,8 +1367,9 @@ fn save_installed_addons(
     Ok(())
 }
 
-fn delete_installed_addons(app: &tauri::AppHandle) -> Result<(), String> {
-    if let Some(path) = installed_addons_path(app) {
+fn delete_installed_addons(app: &tauri::AppHandle, game_dir: &Path) -> Result<(), String> {
+    let canonical_path = canonical_game_path(game_dir)?;
+    if let Some(path) = installed_addons_path(app, &canonical_path) {
         match fs::remove_file(&path) {
             Ok(()) => {}
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
@@ -1183,20 +1379,124 @@ fn delete_installed_addons(app: &tauri::AppHandle) -> Result<(), String> {
     Ok(())
 }
 
-fn restore_tracked_addon(addons_dir: &Path, addon: &InstalledAddon) -> Result<(), String> {
-    let installed = addons_dir.join(&addon.name);
-    if installed.exists() {
-        fs::remove_dir_all(&installed)
-            .map_err(|_| format!("Could not remove addon {}", addon.name))?;
+fn collect_addon_files(root: &Path) -> Result<Vec<InstalledAddonFile>, String> {
+    fn visit(
+        current: &Path,
+        prefix: &str,
+        files: &mut Vec<InstalledAddonFile>,
+    ) -> Result<(), String> {
+        let metadata = fs::symlink_metadata(current)
+            .map_err(|_| "Could not inspect installed addon files".to_string())?;
+        if is_link_or_reparse_point(&metadata) || !metadata.is_dir() {
+            return Err("Installed addon contains an unsafe path".into());
+        }
+        for entry in fs::read_dir(current)
+            .map_err(|_| "Could not inspect installed addon files".to_string())?
+        {
+            let entry = entry.map_err(|_| "Could not inspect installed addon files".to_string())?;
+            let name = entry
+                .file_name()
+                .to_str()
+                .ok_or_else(|| "Installed addon contains an invalid file name".to_string())?
+                .to_owned();
+            content::validate_windows_component(&name)?;
+            let path = entry.path();
+            let relative = if prefix.is_empty() {
+                name
+            } else {
+                format!("{prefix}/{name}")
+            };
+            let metadata = fs::symlink_metadata(&path)
+                .map_err(|_| "Could not inspect installed addon files".to_string())?;
+            if is_link_or_reparse_point(&metadata) {
+                return Err("Installed addon contains a symbolic link or reparse point".into());
+            }
+            if metadata.is_dir() {
+                visit(&path, &relative, files)?;
+            } else if metadata.is_file() {
+                let (size, sha256) = file_hash_and_size(&path)?;
+                files.push(InstalledAddonFile {
+                    path: relative,
+                    size,
+                    sha256,
+                });
+            } else {
+                return Err("Installed addon contains an unsupported file type".into());
+            }
+        }
+        Ok(())
     }
+
+    let mut files = Vec::new();
+    visit(root, "", &mut files)?;
+    files.sort_by(|left, right| left.path.cmp(&right.path));
+    Ok(files)
+}
+
+fn addon_files_match(addons_dir: &Path, addon: &InstalledAddon) -> bool {
+    let installed = addons_dir.join(&addon.name);
+    if ensure_safe_path_components(&installed).is_err() || !installed.is_dir() {
+        return false;
+    }
+    let Ok(actual) = collect_addon_files(&installed) else {
+        return false;
+    };
+    actual.len() == addon.files.len()
+        && actual.iter().zip(&addon.files).all(|(actual, expected)| {
+            actual.path == expected.path
+                && actual.size == expected.size
+                && actual.sha256.eq_ignore_ascii_case(&expected.sha256)
+        })
+}
+
+fn remove_tracked_addon_files(addons_dir: &Path, addon: &InstalledAddon) -> Result<bool, String> {
+    let installed = addons_dir.join(&addon.name);
+    match fs::symlink_metadata(&installed) {
+        Ok(metadata) if is_link_or_reparse_point(&metadata) || !metadata.is_dir() => {
+            return Ok(false);
+        }
+        Ok(_) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(true),
+        Err(_) => return Err(format!("Could not inspect addon {}", addon.name)),
+    }
+    if !addon_files_match(addons_dir, addon) {
+        return Ok(false);
+    }
+    for file in &addon.files {
+        let path = file
+            .path
+            .split('/')
+            .fold(installed.clone(), |mut path, part| {
+                path.push(part);
+                path
+            });
+        ensure_safe_path_components(&path)?;
+        fs::remove_file(&path).map_err(|_| format!("Could not remove addon file {}", file.path))?;
+    }
+    if fs::read_dir(&installed)
+        .map_err(|_| format!("Could not inspect addon {}", addon.name))?
+        .next()
+        .is_none()
+    {
+        fs::remove_dir(&installed).map_err(|_| format!("Could not remove addon {}", addon.name))?;
+    }
+    Ok(true)
+}
+
+fn restore_tracked_addon(addons_dir: &Path, addon: &InstalledAddon) -> Result<bool, String> {
+    if !remove_tracked_addon_files(addons_dir, addon)? {
+        return Ok(false);
+    }
+    let installed = addons_dir.join(&addon.name);
     if let Some(backup_name) = &addon.backup_name {
         let backup = addons_dir.join(backup_name);
-        if backup.exists() {
+        if fs::symlink_metadata(&backup).is_ok() {
+            ensure_safe_path_components(&backup)?;
             fs::rename(&backup, &installed)
                 .map_err(|_| format!("Could not restore backup for {}", addon.name))?;
         }
     }
-    Ok(())
+    Ok(true)
 }
 
 fn install_staged_addons(
@@ -1205,13 +1505,17 @@ fn install_staged_addons(
     addons_dir: &Path,
     stage: &Path,
     folders: &[String],
+    release: u64,
+    patch_version: &str,
 ) -> Result<(), String> {
     if folders.iter().any(|name| !validate_addon_name(name)) {
         return Err("Addons.zip contains an invalid addon folder".into());
     }
     let old = read_installed_addons(app, game_dir)?.unwrap_or(InstalledAddonsManifest {
-        version: 1,
+        version: INSTALLED_ADDONS_MANIFEST_VERSION,
         game_path: canonical_game_path(game_dir)?,
+        release,
+        patch_version: patch_version.into(),
         addons: Vec::new(),
     });
 
@@ -1225,16 +1529,31 @@ fn install_staged_addons(
     let mut manifest_addons = Vec::new();
     let mut installed_names: Vec<String> = Vec::new();
     let mut restored_backups: Vec<(String, String)> = Vec::new();
-    let mut replaced_existing: Vec<String> = Vec::new();
+    let mut created_backups: Vec<(String, String)> = Vec::new();
 
     let result = (|| {
         // Stage launcher-owned directories before mutation so later changes can roll back.
         for addon in &old.addons {
             let current = addons_dir.join(&addon.name);
-            if current.exists() {
-                fs::rename(&current, rollback.join(&addon.name)).map_err(|_| {
-                    format!("Could not prepare addon {} for replacement", addon.name)
-                })?;
+            match fs::symlink_metadata(&current) {
+                Ok(metadata) => {
+                    if is_link_or_reparse_point(&metadata) || !metadata.is_dir() {
+                        return Err(format!(
+                            "Could not prepare addon {} for replacement",
+                            addon.name
+                        ));
+                    }
+                    fs::rename(&current, rollback.join(&addon.name)).map_err(|_| {
+                        format!("Could not prepare addon {} for replacement", addon.name)
+                    })?;
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(_) => {
+                    return Err(format!(
+                        "Could not prepare addon {} for replacement",
+                        addon.name
+                    ));
+                }
             }
         }
 
@@ -1258,17 +1577,33 @@ fn install_staged_addons(
         for name in folders {
             let current = addons_dir.join(name);
             let old_entry = old.addons.iter().find(|addon| addon.name == *name);
+            let current_metadata = match fs::symlink_metadata(&current) {
+                Ok(metadata) => Some(metadata),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+                Err(_) => return Err(format!("Could not inspect addon {name}")),
+            };
             let backup_name = if let Some(entry) = old_entry {
                 entry.backup_name.clone()
-            } else if current.exists() {
-                // Project Rx addon names are reserved. Replace an existing
-                // colliding folder without creating a persistent user backup;
-                // the temporary rollback copy still protects this transaction
-                // if a later install step fails.
-                fs::rename(&current, rollback.join(name))
+            } else if let Some(metadata) = current_metadata {
+                // Preserve a pre-existing user addon folder across install
+                // and uninstall. The backup is recorded only after the new
+                // signed addon has been installed successfully.
+                if is_link_or_reparse_point(&metadata) || !metadata.is_dir() {
+                    return Err(format!("Could not prepare addon {name} for replacement"));
+                }
+                ensure_safe_path_components(&current)
                     .map_err(|_| format!("Could not prepare addon {name} for replacement"))?;
-                replaced_existing.push(name.clone());
-                None
+                let backup_name = format!(".rx-user-backup-{name}");
+                let backup = addons_dir.join(&backup_name);
+                if fs::symlink_metadata(&backup).is_ok() {
+                    return Err(format!(
+                        "Could not prepare addon {name}: its user backup already exists"
+                    ));
+                }
+                fs::rename(&current, &backup)
+                    .map_err(|_| format!("Could not prepare addon {name} for replacement"))?;
+                created_backups.push((name.clone(), backup_name.clone()));
+                Some(backup_name)
             } else {
                 None
             };
@@ -1276,14 +1611,18 @@ fn install_staged_addons(
             fs::rename(stage.join(name), &current)
                 .map_err(|_| format!("Could not install addon {name}"))?;
             installed_names.push(name.clone());
+            let files = collect_addon_files(&current)?;
             manifest_addons.push(InstalledAddon {
                 name: name.clone(),
                 backup_name,
+                files,
             });
         }
         let manifest = InstalledAddonsManifest {
-            version: 1,
+            version: INSTALLED_ADDONS_MANIFEST_VERSION,
             game_path: canonical_game_path(game_dir)?,
+            release,
+            patch_version: patch_version.into(),
             addons: manifest_addons,
         };
         save_installed_addons(app, &manifest)
@@ -1302,10 +1641,10 @@ fn install_staged_addons(
                 fs::rename(restored, addons_dir.join(backup_name)).ok();
             }
         }
-        for name in replaced_existing.iter().rev() {
-            let replaced = rollback.join(name);
-            if replaced.exists() && !addons_dir.join(name).exists() {
-                fs::rename(replaced, addons_dir.join(name)).ok();
+        for (name, backup_name) in created_backups.iter().rev() {
+            let backup = addons_dir.join(backup_name);
+            if backup.exists() && !addons_dir.join(name).exists() {
+                fs::rename(backup, addons_dir.join(name)).ok();
             }
         }
         for addon in &old.addons {
@@ -1337,11 +1676,8 @@ struct InstalledContentManifest {
     files: Vec<InstalledContentFile>,
 }
 
-fn installed_content_path(app: &tauri::AppHandle) -> Option<PathBuf> {
-    app.path()
-        .app_config_dir()
-        .ok()
-        .map(|dir| dir.join(INSTALLED_CONTENT_FILENAME))
+fn installed_content_path(app: &tauri::AppHandle, canonical_path: &str) -> Option<PathBuf> {
+    state_file_path(app, "installed-content", canonical_path)
 }
 
 fn installed_content_matches_game(
@@ -1367,7 +1703,8 @@ fn read_installed_content(
     app: &tauri::AppHandle,
     game_dir: &Path,
 ) -> Result<Option<InstalledContentManifest>, String> {
-    let Some(path) = installed_content_path(app) else {
+    let canonical_path = canonical_game_path(game_dir)?;
+    let Some(path) = installed_content_path(app, &canonical_path) else {
         return Ok(None);
     };
     let text = match fs::read_to_string(path) {
@@ -1379,7 +1716,7 @@ fn read_installed_content(
         Ok(manifest) => manifest,
         Err(_) => return Ok(None),
     };
-    if !installed_content_matches_game(&manifest, &canonical_game_path(game_dir)?) {
+    if !installed_content_matches_game(&manifest, &canonical_path) {
         return Ok(None);
     }
     Ok(Some(manifest))
@@ -1389,7 +1726,8 @@ fn save_installed_content(
     app: &tauri::AppHandle,
     manifest: &InstalledContentManifest,
 ) -> Result<(), String> {
-    let path = installed_content_path(app).ok_or("Could not locate launcher data directory")?;
+    let path = installed_content_path(app, &manifest.game_path)
+        .ok_or("Could not locate launcher data directory")?;
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)
             .map_err(|_| "Could not create launcher data directory".to_string())?;
@@ -1432,8 +1770,9 @@ fn save_installed_content(
     Ok(())
 }
 
-fn delete_installed_content(app: &tauri::AppHandle) -> Result<(), String> {
-    if let Some(path) = installed_content_path(app) {
+fn delete_installed_content(app: &tauri::AppHandle, game_dir: &Path) -> Result<(), String> {
+    let canonical_path = canonical_game_path(game_dir)?;
+    if let Some(path) = installed_content_path(app, &canonical_path) {
         match fs::remove_file(path) {
             Ok(()) => {}
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
@@ -1488,7 +1827,8 @@ fn uninstall_patch(app: tauri::AppHandle, game_path: String) -> Result<String, S
     let content_manifest = read_installed_content(&app, &dir)?;
 
     let rx_wow = dir.join("rx-wow.exe");
-    if rx_wow.exists() {
+    if fs::symlink_metadata(&rx_wow).is_ok() {
+        ensure_safe_path_components(&rx_wow)?;
         if !rx_wow.is_file() {
             return Err("rx-wow.exe is not a regular file".into());
         }
@@ -1514,36 +1854,38 @@ fn uninstall_patch(app: tauri::AppHandle, game_path: String) -> Result<String, S
             }
         }
         if remaining.is_empty() {
-            delete_installed_content(&app)?;
+            delete_installed_content(&app, &dir)?;
         } else {
             content_manifest.files = remaining;
             save_installed_content(&app, &content_manifest)?;
         }
     } else {
-        // Preserve uninstall compatibility with launcher versions that used
-        // the former fixed MPQ list before installed_content.json existed.
-        for relative in LEGACY_PATCH_PATHS {
-            let path = resolve_content_path(&dir, relative)?;
-            if path.exists() {
-                fs::remove_file(&path).map_err(|_| format!("Failed to remove {relative}"))?;
-            }
-        }
+        // Without authenticated per-installation tracking, preserve every
+        // content file rather than guessing ownership from a fixed filename.
     }
 
     let addons_dir = dir.join("Interface").join("AddOns");
     if let Some(mut manifest) = manifest {
         let mut remaining = Vec::new();
+        let mut preserved_addons = Vec::new();
         let mut first_error = None;
         for addon in &manifest.addons {
-            if let Err(error) = restore_tracked_addon(&addons_dir, addon) {
-                if first_error.is_none() {
-                    first_error = Some(error);
+            match restore_tracked_addon(&addons_dir, addon) {
+                Ok(true) => {}
+                Ok(false) => {
+                    preserved_addons.push(addon.name.clone());
+                    remaining.push(addon.clone());
                 }
-                remaining.push(addon.clone());
+                Err(error) => {
+                    if first_error.is_none() {
+                        first_error = Some(error);
+                    }
+                    remaining.push(addon.clone());
+                }
             }
         }
         if remaining.is_empty() {
-            delete_installed_addons(&app)?;
+            delete_installed_addons(&app, &dir)?;
         } else {
             manifest.addons = remaining;
             save_installed_addons(&app, &manifest)?;
@@ -1552,6 +1894,13 @@ fn uninstall_patch(app: tauri::AppHandle, game_path: String) -> Result<String, S
             return Err(format!(
                 "Uninstall was incomplete: {error}. Tracking data was retained for retry."
             ));
+        }
+        if !preserved_addons.is_empty() {
+            preserved_content.extend(
+                preserved_addons
+                    .into_iter()
+                    .map(|name| format!("Interface/AddOns/{name}")),
+            );
         }
     }
 
@@ -1565,6 +1914,57 @@ fn uninstall_patch(app: tauri::AppHandle, game_path: String) -> Result<String, S
     }
 }
 
+fn verify_patch_files(
+    dir: &Path,
+    manifest: &content::ContentManifest,
+    installed_addons: Option<&InstalledAddonsManifest>,
+) -> Vec<String> {
+    let mut bad = Vec::new();
+    let source = dir.join("Wow.exe");
+    match file_hash_and_size(&source) {
+        Ok((size, hash))
+            if size == manifest.executable_patch.source_size
+                && hash == manifest.executable_patch.source_sha256.to_ascii_lowercase() => {}
+        _ => bad.push("Wow.exe (unsupported or corrupted source)".into()),
+    }
+    let output = dir.join("rx-wow.exe");
+    match file_hash_and_size(&output) {
+        Ok((size, hash))
+            if size == manifest.executable_patch.output_size
+                && hash == manifest.executable_patch.output_sha256.to_ascii_lowercase() => {}
+        _ => bad.push("rx-wow.exe (missing or corrupted)".into()),
+    }
+    for file in &manifest.files {
+        if file.kind == content::ContentFileKind::AddonsZip {
+            let addons_dir = dir.join("Interface").join("AddOns");
+            let ready = installed_addons.is_some_and(|installed| {
+                installed.release == manifest.release
+                    && installed.patch_version == manifest.version
+                    && !installed.addons.is_empty()
+                    && installed
+                        .addons
+                        .iter()
+                        .all(|addon| addon_files_match(&addons_dir, addon))
+            });
+            if !ready {
+                bad.push(format!("{} (missing or incomplete)", file.path));
+            }
+            continue;
+        }
+        let path = match resolve_content_path(dir, &file.path) {
+            Ok(path) => path,
+            Err(_) => {
+                bad.push(format!("{} (unsafe path)", file.path));
+                continue;
+            }
+        };
+        if let Some(problem) = classify_patch_file(&path, &file.path, &file.sha256) {
+            bad.push(problem);
+        }
+    }
+    bad
+}
+
 #[tauri::command]
 async fn verify_patch(
     app: tauri::AppHandle,
@@ -1574,66 +1974,26 @@ async fn verify_patch(
     let dir = validate_game_path(&game_path)?;
     let manifest = fetch_content_manifest(&app, &http.0).await?;
     let installed_addons = read_installed_addons(&app, &dir)?;
-    let expected_source = manifest.executable_patch.source_sha256.to_ascii_lowercase();
-    let expected_source_size = manifest.executable_patch.source_size;
-    let expected_output = manifest.executable_patch.output_sha256.to_ascii_lowercase();
-    let expected_output_size = manifest.executable_patch.output_size;
 
     // Run hashing on a blocking thread to avoid stalling the async runtime
     tauri::async_runtime::spawn_blocking(move || {
-        let mut bad: Vec<String> = Vec::new();
-        let source = dir.join("Wow.exe");
-        match file_hash_and_size(&source) {
-            Ok((size, hash)) if size == expected_source_size && hash == expected_source => {}
-            _ => bad.push("Wow.exe (unsupported or corrupted source)".into()),
-        }
-        let output = dir.join("rx-wow.exe");
-        match file_hash_and_size(&output) {
-            Ok((size, hash)) if size == expected_output_size && hash == expected_output => {}
-            _ => bad.push("rx-wow.exe (missing or corrupted)".into()),
-        }
-        for file in &manifest.files {
-            if file.kind == content::ContentFileKind::AddonsZip {
-                let ready = installed_addons.as_ref().is_some_and(|installed| {
-                    !installed.addons.is_empty()
-                        && installed.addons.iter().all(|addon| {
-                            dir.join("Interface")
-                                .join("AddOns")
-                                .join(&addon.name)
-                                .is_dir()
-                        })
-                });
-                if !ready {
-                    bad.push(format!("{} (missing or incomplete)", file.path));
-                }
-                continue;
-            }
-            let path = match resolve_content_path(&dir, &file.path) {
-                Ok(path) => path,
-                Err(_) => {
-                    bad.push(format!("{} (unsafe path)", file.path));
-                    continue;
-                }
-            };
-            if let Some(problem) = classify_patch_file(&path, &file.path, &file.sha256) {
-                bad.push(problem);
-            }
-        }
-        Ok(bad)
+        verify_patch_files(&dir, &manifest, installed_addons.as_ref())
     })
     .await
-    .unwrap_or_else(|_| Err("Verification failed".into()))
+    .map_err(|_| "Verification failed".into())
 }
 
 #[tauri::command]
 fn check_realmlist(game_path: String) -> Result<String, String> {
     let dir = validate_game_path(&game_path)?;
     let base = dir.join("Data");
+    ensure_safe_path_components(&base)?;
     let locales = ["enUS", "enGB"];
 
     for locale in &locales {
         let realmlist_path = base.join(locale).join("realmlist.wtf");
-        if realmlist_path.exists() {
+        if fs::symlink_metadata(&realmlist_path).is_ok() {
+            ensure_safe_path_components(&realmlist_path)?;
             let content = fs::read_to_string(&realmlist_path)
                 .map_err(|_| "Failed to read realmlist".to_string())?;
             return if content.contains("projectrx.net") {
@@ -1654,6 +2014,7 @@ fn patch_realmlist(game_path: String) -> Result<String, String> {
     if !base.is_dir() {
         return Err("Data folder not found. Make sure you selected a valid game directory.".into());
     }
+    ensure_safe_path_components(&base)?;
 
     let locales = ["enUS", "enGB"];
     let mut patched = false;
@@ -1662,13 +2023,14 @@ fn patch_realmlist(game_path: String) -> Result<String, String> {
     for locale in &locales {
         let locale_dir = base.join(locale);
         let realmlist_path = locale_dir.join("realmlist.wtf");
-        if realmlist_path.exists() {
-            fs::write(&realmlist_path, REALMLIST_VALUE)
-                .map_err(|_| "Failed to write realmlist".to_string())?;
+        if fs::symlink_metadata(&realmlist_path).is_ok() {
+            ensure_safe_path_components(&realmlist_path)?;
+            write_file_atomically(&realmlist_path, REALMLIST_VALUE.as_bytes(), "realmlist")?;
             patched = true;
         } else if create_in.is_none() && locale_dir.is_dir() {
             // Prefer an existing locale directory when the file itself is
             // missing; this matches the normal WoW installation layout.
+            ensure_safe_path_components(&locale_dir)?;
             create_in = Some(locale_dir);
         }
     }
@@ -1682,8 +2044,8 @@ fn patch_realmlist(game_path: String) -> Result<String, String> {
         let locale_dir = create_in.unwrap_or_else(|| base.join("enUS"));
         fs::create_dir_all(&locale_dir)
             .map_err(|_| "Failed to create realmlist directory".to_string())?;
-        fs::write(locale_dir.join("realmlist.wtf"), REALMLIST_VALUE)
-            .map_err(|_| "Failed to write realmlist".to_string())?;
+        let realmlist_path = locale_dir.join("realmlist.wtf");
+        write_file_atomically(&realmlist_path, REALMLIST_VALUE.as_bytes(), "realmlist")?;
         Ok("Realmlist created and set successfully".into())
     }
 }
@@ -1707,6 +2069,16 @@ fn is_allowed_url(url: &str) -> bool {
     })
 }
 
+fn is_allowed_http_redirect(url: &url::Url) -> bool {
+    url.scheme() == "https"
+        && url.username().is_empty()
+        && url.password().is_none()
+        && url.port().is_none()
+        && url
+            .host_str()
+            .is_some_and(|host| HTTP_ALLOWED_DOMAINS.contains(&host))
+}
+
 #[tauri::command]
 fn open_url(url: String) -> Result<(), String> {
     let parsed = url::Url::parse(&url).map_err(|_| "Invalid URL".to_string())?;
@@ -1724,7 +2096,14 @@ fn open_url(url: String) -> Result<(), String> {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let http_client = reqwest::Client::builder()
-        .redirect(reqwest::redirect::Policy::limited(10))
+        .https_only(true)
+        .redirect(reqwest::redirect::Policy::custom(|attempt| {
+            if is_allowed_http_redirect(attempt.url()) {
+                attempt.follow()
+            } else {
+                attempt.stop()
+            }
+        }))
         .connect_timeout(Duration::from_secs(15))
         .timeout(Duration::from_secs(600))
         .build()
@@ -1828,6 +2207,8 @@ pub fn run() {
 mod tests {
     use super::*;
     use std::net::TcpListener;
+    #[cfg(unix)]
+    use std::os::unix::fs::symlink;
     use std::sync::atomic::{AtomicU64, Ordering};
 
     static TEMP_ID: AtomicU64 = AtomicU64::new(0);
@@ -1905,6 +2286,64 @@ mod tests {
     }
 
     #[test]
+    fn atomic_realmlist_replacement_does_not_truncate_in_place() {
+        let temp = TestDir::new();
+        let data = temp.0.join("Data").join("enUS");
+        fs::create_dir_all(&data).unwrap();
+        let realmlist = data.join("realmlist.wtf");
+        fs::write(&realmlist, b"set realmlist old.example").unwrap();
+
+        patch_realmlist(temp.0.to_string_lossy().into_owned()).unwrap();
+
+        assert_eq!(fs::read_to_string(realmlist).unwrap(), REALMLIST_VALUE);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn realmlist_rejects_symbolic_links() {
+        let temp = TestDir::new();
+        let data = temp.0.join("Data").join("enUS");
+        fs::create_dir_all(&data).unwrap();
+        let outside = temp.0.join("outside.txt");
+        fs::write(&outside, b"protected").unwrap();
+        symlink(&outside, data.join("realmlist.wtf")).unwrap();
+
+        assert!(patch_realmlist(temp.0.to_string_lossy().into_owned()).is_err());
+        assert_eq!(fs::read(&outside).unwrap(), b"protected");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn atomic_realmlist_replacement_does_not_modify_hard_link_source() {
+        let temp = TestDir::new();
+        let data = temp.0.join("Data").join("enUS");
+        fs::create_dir_all(&data).unwrap();
+        let wow = temp.0.join("Wow.exe");
+        fs::write(&wow, b"protected executable").unwrap();
+        fs::hard_link(&wow, data.join("realmlist.wtf")).unwrap();
+
+        patch_realmlist(temp.0.to_string_lossy().into_owned()).unwrap();
+
+        assert_eq!(fs::read(&wow).unwrap(), b"protected executable");
+        assert_eq!(
+            fs::read_to_string(data.join("realmlist.wtf")).unwrap(),
+            REALMLIST_VALUE
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn game_path_rejects_symbolic_link_directories() {
+        let temp = TestDir::new();
+        let target = temp.0.join("target");
+        fs::create_dir(&target).unwrap();
+        let link = temp.0.join("link");
+        symlink(&target, &link).unwrap();
+
+        assert!(validate_game_path(link.to_str().unwrap()).is_err());
+    }
+
+    #[test]
     fn tcp_probe_handles_reachable_and_unreachable_loopback() {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let reachable = listener.local_addr().unwrap();
@@ -1953,11 +2392,18 @@ mod tests {
     #[test]
     fn path_bound_manifest_rejects_other_paths_and_unsafe_names() {
         let mut manifest = InstalledAddonsManifest {
-            version: 1,
+            version: INSTALLED_ADDONS_MANIFEST_VERSION,
             game_path: "C:\\Game".into(),
+            release: 1,
+            patch_version: "1.0.0".into(),
             addons: vec![InstalledAddon {
                 name: "Addon".into(),
                 backup_name: Some("Addon_rx_backup".into()),
+                files: vec![InstalledAddonFile {
+                    path: "main.lua".into(),
+                    size: 1,
+                    sha256: "00".repeat(32),
+                }],
             }],
         };
         assert!(manifest_matches_game(&manifest, "C:\\Game"));
@@ -1969,6 +2415,30 @@ mod tests {
     }
 
     #[test]
+    fn addon_verification_rejects_modified_files() {
+        let temp = TestDir::new();
+        let addons_dir = temp.0.join("AddOns");
+        let addon_dir = addons_dir.join("Addon");
+        fs::create_dir_all(&addon_dir).unwrap();
+        let file = addon_dir.join("main.lua");
+        fs::write(&file, b"one").unwrap();
+        let (size, sha256) = file_hash_and_size(&file).unwrap();
+        let addon = InstalledAddon {
+            name: "Addon".into(),
+            backup_name: None,
+            files: vec![InstalledAddonFile {
+                path: "main.lua".into(),
+                size,
+                sha256,
+            }],
+        };
+
+        assert!(addon_files_match(&addons_dir, &addon));
+        fs::write(&file, b"modified").unwrap();
+        assert!(!addon_files_match(&addons_dir, &addon));
+    }
+
+    #[test]
     fn url_allowlist_requires_https_and_exact_host() {
         assert!(is_allowed_url("https://projectrx.net/news"));
         assert!(is_allowed_url("https://www.projectrx.net/news"));
@@ -1977,6 +2447,22 @@ mod tests {
         assert!(!is_allowed_url("https://projectrx.net.evil.example/news"));
         assert!(!is_allowed_url("https://user:pass@projectrx.net/news"));
         assert!(!is_allowed_url("https://projectrx.net:444/news"));
+    }
+
+    #[test]
+    fn http_redirect_policy_requires_https_and_approved_hosts() {
+        assert!(is_allowed_http_redirect(
+            &url::Url::parse("https://release-assets.githubusercontent.com/file").unwrap()
+        ));
+        assert!(is_allowed_http_redirect(
+            &url::Url::parse("https://projectrx.net/news").unwrap()
+        ));
+        assert!(!is_allowed_http_redirect(
+            &url::Url::parse("http://projectrx.net/news").unwrap()
+        ));
+        assert!(!is_allowed_http_redirect(
+            &url::Url::parse("https://evil.example/file").unwrap()
+        ));
     }
 
     #[test]
