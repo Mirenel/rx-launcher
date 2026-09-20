@@ -6,6 +6,7 @@ use std::io::{BufReader, Read, Write};
 use std::net::TcpStream;
 use std::net::ToSocketAddrs;
 use std::path::{Component, Path, PathBuf};
+use std::sync::Arc;
 use std::time::Duration;
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
@@ -40,6 +41,18 @@ const CONTENT_CACHE_FILENAME: &str = "content-manifest.json";
 const INSTALLED_CONTENT_FILENAME: &str = "installed_content.json";
 
 struct HttpClient(reqwest::Client);
+
+#[derive(Clone, Default)]
+struct OperationLock(Arc<tokio::sync::Mutex<()>>);
+
+impl OperationLock {
+    async fn try_acquire(&self) -> Result<tokio::sync::OwnedMutexGuard<()>, String> {
+        self.0
+            .clone()
+            .try_lock_owned()
+            .map_err(|_| "Another game operation is already in progress".into())
+    }
+}
 
 /// Validates game_path from the frontend: must be absolute, no traversal,
 /// must exist as a directory. Returns the validated PathBuf or a generic error.
@@ -422,9 +435,11 @@ async fn get_changelog(http: tauri::State<'_, HttpClient>) -> Result<Vec<Changel
 async fn launch_game(
     app: tauri::AppHandle,
     http: tauri::State<'_, HttpClient>,
+    operations: tauri::State<'_, OperationLock>,
     game_path: String,
     wine_prefix: Option<String>,
 ) -> Result<(), String> {
+    let _operation = operations.try_acquire().await?;
     let dir = validate_game_path(&game_path)?;
     let wow_exe = dir.join("rx-wow.exe");
     ensure_safe_path_components(&wow_exe)?;
@@ -881,9 +896,11 @@ async fn prepare_rx_wow(
 async fn download_patch(
     app: tauri::AppHandle,
     http: tauri::State<'_, HttpClient>,
+    operations: tauri::State<'_, OperationLock>,
     game_path: String,
     repair: bool,
 ) -> Result<String, String> {
+    let _operation = operations.try_acquire().await?;
     let dir = validate_game_path(&game_path)?;
     let data_dir = dir.join("Data");
     let addons_dir = dir.join("Interface").join("AddOns");
@@ -1048,7 +1065,17 @@ async fn download_patch(
             })();
             fs::remove_dir_all(&stage).ok();
             fs::remove_file(&part_path).ok();
-            install_result?;
+            if install_result? {
+                emit_progress(
+                    &app,
+                    completed_bytes,
+                    total_bytes,
+                    "Migrated legacy addon tracking; addon folders not in the current signed release were preserved as unmanaged content.".into(),
+                    true,
+                    completed_bytes,
+                    total_bytes,
+                );
+            }
         } else {
             if let Err(error) = replace_verified_file(&part_path, final_path, filename) {
                 fs::remove_file(&part_path).ok();
@@ -1221,6 +1248,89 @@ fn state_file_path(app: &tauri::AppHandle, prefix: &str, canonical_path: &str) -
 
 fn installed_addons_path(app: &tauri::AppHandle, canonical_path: &str) -> Option<PathBuf> {
     state_file_path(app, "installed-addons", canonical_path)
+}
+
+fn legacy_state_path(app: &tauri::AppHandle, filename: &str) -> Option<PathBuf> {
+    app.path()
+        .app_config_dir()
+        .ok()
+        .map(|dir| dir.join(filename))
+}
+
+fn legacy_installed_addons_path(app: &tauri::AppHandle) -> Option<PathBuf> {
+    legacy_state_path(app, "installed_addons.json")
+}
+
+#[derive(Deserialize)]
+struct LegacyInstalledAddon {
+    name: String,
+    backup_name: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct LegacyInstalledAddonsManifest {
+    version: u32,
+    game_path: String,
+    addons: Vec<LegacyInstalledAddon>,
+}
+
+fn legacy_addons_match_game(
+    manifest: &LegacyInstalledAddonsManifest,
+    canonical_path: &str,
+) -> bool {
+    let same_path = if cfg!(windows) {
+        manifest.game_path.eq_ignore_ascii_case(canonical_path)
+    } else {
+        manifest.game_path == canonical_path
+    };
+    manifest.version == 1
+        && same_path
+        && manifest.addons.iter().all(|addon| {
+            validate_addon_name(&addon.name)
+                && addon.backup_name.as_deref().is_none_or(validate_addon_name)
+        })
+}
+
+fn legacy_addons_for_game(
+    app: &tauri::AppHandle,
+    game_dir: &Path,
+) -> Result<Option<LegacyInstalledAddonsManifest>, String> {
+    let canonical_path = canonical_game_path(game_dir)?;
+    let Some(path) = legacy_installed_addons_path(app) else {
+        return Ok(None);
+    };
+    let text = match fs::read_to_string(path) {
+        Ok(text) => text,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(_) => return Err("Could not read legacy addon tracking data".into()),
+    };
+    let manifest: LegacyInstalledAddonsManifest = match serde_json::from_str(&text) {
+        Ok(manifest) => manifest,
+        Err(_) => return Ok(None),
+    };
+    if legacy_addons_match_game(&manifest, &canonical_path) {
+        Ok(Some(manifest))
+    } else {
+        Ok(None)
+    }
+}
+
+fn retire_legacy_addons(app: &tauri::AppHandle, game_dir: &Path) {
+    let Ok(canonical_path) = canonical_game_path(game_dir) else {
+        return;
+    };
+    let Some(path) = legacy_installed_addons_path(app) else {
+        return;
+    };
+    let Ok(text) = fs::read_to_string(&path) else {
+        return;
+    };
+    let Ok(manifest) = serde_json::from_str::<LegacyInstalledAddonsManifest>(&text) else {
+        return;
+    };
+    if legacy_addons_match_game(&manifest, &canonical_path) {
+        fs::remove_file(path).ok();
+    }
 }
 
 fn canonical_game_path(game_dir: &Path) -> Result<String, String> {
@@ -1449,6 +1559,140 @@ fn addon_files_match(addons_dir: &Path, addon: &InstalledAddon) -> bool {
         })
 }
 
+fn addon_file_path(root: &Path, relative: &str) -> PathBuf {
+    relative
+        .split('/')
+        .fold(root.to_path_buf(), |mut path, part| {
+            path.push(part);
+            path
+        })
+}
+
+/// Preserve only files that a user changed or added to a launcher-owned addon.
+/// The backup is an overlay: the original user addon, when present, remains
+/// intact and these files replace or extend it when the addon is uninstalled.
+fn preserve_modified_addon_files(
+    addons_dir: &Path,
+    current: &Path,
+    addon: &InstalledAddon,
+) -> Result<(Option<String>, bool), String> {
+    ensure_safe_path_components(current)?;
+    let actual = collect_addon_files(current)?;
+    let modified: Vec<InstalledAddonFile> = actual
+        .into_iter()
+        .filter(|file| {
+            !addon.files.iter().any(|expected| {
+                expected.path == file.path
+                    && expected.size == file.size
+                    && expected.sha256.eq_ignore_ascii_case(&file.sha256)
+            })
+        })
+        .collect();
+    if modified.is_empty() {
+        return Ok((addon.backup_name.clone(), false));
+    }
+
+    let backup_name = addon
+        .backup_name
+        .clone()
+        .unwrap_or_else(|| format!(".rx-user-backup-{}", addon.name));
+    let backup_root = addons_dir.join(&backup_name);
+    let created_backup = match fs::symlink_metadata(&backup_root) {
+        Ok(metadata) => {
+            if is_link_or_reparse_point(&metadata) || !metadata.is_dir() {
+                return Err(format!("Could not prepare addon {} backup", addon.name));
+            }
+            false
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            ensure_safe_path_components(&backup_root)?;
+            fs::create_dir(&backup_root)
+                .map_err(|_| format!("Could not create addon {} backup", addon.name))?;
+            true
+        }
+        Err(_) => return Err(format!("Could not inspect addon {} backup", addon.name)),
+    };
+
+    let copy_result = (|| {
+        for file in &modified {
+            let source = addon_file_path(current, &file.path);
+            let destination = addon_file_path(&backup_root, &file.path);
+            ensure_safe_path_components(&source)?;
+            if let Some(parent) = destination.parent() {
+                ensure_safe_path_components(parent)?;
+                fs::create_dir_all(parent)
+                    .map_err(|_| format!("Could not preserve addon file {}", file.path))?;
+            }
+            ensure_safe_path_components(&destination)?;
+            if let Ok(metadata) = fs::symlink_metadata(&destination) {
+                if is_link_or_reparse_point(&metadata) || metadata.is_dir() {
+                    return Err(format!("Could not preserve addon file {}", file.path));
+                }
+            }
+            fs::copy(&source, &destination)
+                .map_err(|_| format!("Could not preserve addon file {}", file.path))?;
+        }
+        Ok::<(), String>(())
+    })();
+    if let Err(error) = copy_result {
+        if created_backup {
+            fs::remove_dir_all(&backup_root).ok();
+        }
+        return Err(error);
+    }
+
+    Ok((Some(backup_name), created_backup))
+}
+
+fn addon_files_owned_or_missing(addons_dir: &Path, addon: &InstalledAddon) -> bool {
+    let installed = addons_dir.join(&addon.name);
+    if ensure_safe_path_components(&installed).is_err() || !installed.is_dir() {
+        return false;
+    }
+    let Ok(actual) = collect_addon_files(&installed) else {
+        return false;
+    };
+    actual.iter().all(|file| {
+        addon.files.iter().any(|expected| {
+            expected.path == file.path
+                && expected.size == file.size
+                && expected.sha256.eq_ignore_ascii_case(&file.sha256)
+        })
+    })
+}
+
+fn remove_empty_addon_directories(installed: &Path, addon: &InstalledAddon) -> Result<(), String> {
+    let mut directories = Vec::new();
+    for file in &addon.files {
+        let file_path = addon_file_path(installed, &file.path);
+        let mut directory = file_path.parent();
+        while let Some(path) = directory {
+            directories.push(path.to_path_buf());
+            if path == installed {
+                break;
+            }
+            directory = path.parent();
+        }
+    }
+    directories.sort_by_key(|path| std::cmp::Reverse(path.components().count()));
+    directories.dedup();
+    for directory in directories {
+        match fs::remove_dir(&directory) {
+            Ok(()) => {}
+            Err(error)
+                if error.kind() == std::io::ErrorKind::NotFound
+                    || error.kind() == std::io::ErrorKind::DirectoryNotEmpty => {}
+            Err(_) => {
+                return Err(format!(
+                    "Could not remove addon directory {}",
+                    directory.display()
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
 fn remove_tracked_addon_files(addons_dir: &Path, addon: &InstalledAddon) -> Result<bool, String> {
     let installed = addons_dir.join(&addon.name);
     match fs::symlink_metadata(&installed) {
@@ -1459,28 +1703,83 @@ fn remove_tracked_addon_files(addons_dir: &Path, addon: &InstalledAddon) -> Resu
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(true),
         Err(_) => return Err(format!("Could not inspect addon {}", addon.name)),
     }
-    if !addon_files_match(addons_dir, addon) {
+    if !addon_files_owned_or_missing(addons_dir, addon) {
         return Ok(false);
     }
     for file in &addon.files {
-        let path = file
-            .path
-            .split('/')
-            .fold(installed.clone(), |mut path, part| {
-                path.push(part);
-                path
-            });
+        let path = addon_file_path(&installed, &file.path);
         ensure_safe_path_components(&path)?;
-        fs::remove_file(&path).map_err(|_| format!("Could not remove addon file {}", file.path))?;
+        match fs::remove_file(&path) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(_) => return Err(format!("Could not remove addon file {}", file.path)),
+        }
     }
-    if fs::read_dir(&installed)
-        .map_err(|_| format!("Could not inspect addon {}", addon.name))?
-        .next()
-        .is_none()
-    {
-        fs::remove_dir(&installed).map_err(|_| format!("Could not remove addon {}", addon.name))?;
-    }
+    remove_empty_addon_directories(&installed, addon)?;
     Ok(true)
+}
+
+fn merge_addon_backup(source: &Path, destination: &Path) -> Result<(), String> {
+    for entry in fs::read_dir(source).map_err(|_| "Could not inspect addon backup".to_string())? {
+        let entry = entry.map_err(|_| "Could not inspect addon backup".to_string())?;
+        let source_path = entry.path();
+        let name = entry.file_name();
+        let destination_path = destination.join(&name);
+        let source_metadata = fs::symlink_metadata(&source_path)
+            .map_err(|_| "Could not inspect addon backup".to_string())?;
+        if is_link_or_reparse_point(&source_metadata) {
+            return Err("Addon backup contains a symbolic link or reparse point".into());
+        }
+        if source_metadata.is_dir() {
+            match fs::symlink_metadata(&destination_path) {
+                Ok(destination_metadata) => {
+                    if is_link_or_reparse_point(&destination_metadata)
+                        || !destination_metadata.is_dir()
+                    {
+                        return Err("Could not restore addon backup".into());
+                    }
+                    merge_addon_backup(&source_path, &destination_path)?;
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                    fs::rename(&source_path, &destination_path)
+                        .map_err(|_| "Could not restore addon backup".to_string())?;
+                }
+                Err(_) => return Err("Could not inspect addon backup".into()),
+            }
+            continue;
+        }
+        if !source_metadata.is_file() {
+            return Err("Addon backup contains an unsupported file type".into());
+        }
+        if fs::symlink_metadata(&destination_path).is_ok() {
+            return Err("Could not restore addon backup without overwriting user files".into());
+        }
+        fs::rename(&source_path, &destination_path)
+            .map_err(|_| "Could not restore addon backup".to_string())?;
+    }
+    fs::remove_dir(source).map_err(|_| "Could not clean addon backup".to_string())?;
+    Ok(())
+}
+
+fn restore_addon_backup(backup: &Path, installed: &Path) -> Result<(), String> {
+    ensure_safe_path_components(backup)?;
+    let backup_metadata =
+        fs::symlink_metadata(backup).map_err(|_| "Could not inspect addon backup".to_string())?;
+    if is_link_or_reparse_point(&backup_metadata) || !backup_metadata.is_dir() {
+        return Err("Could not restore addon backup".into());
+    }
+    match fs::symlink_metadata(installed) {
+        Ok(metadata) => {
+            if is_link_or_reparse_point(&metadata) || !metadata.is_dir() {
+                return Err("Could not restore addon backup".into());
+            }
+            merge_addon_backup(backup, installed)
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            fs::rename(backup, installed).map_err(|_| "Could not restore addon backup".to_string())
+        }
+        Err(_) => Err("Could not inspect addon installation".into()),
+    }
 }
 
 fn restore_tracked_addon(addons_dir: &Path, addon: &InstalledAddon) -> Result<bool, String> {
@@ -1491,8 +1790,7 @@ fn restore_tracked_addon(addons_dir: &Path, addon: &InstalledAddon) -> Result<bo
     if let Some(backup_name) = &addon.backup_name {
         let backup = addons_dir.join(backup_name);
         if fs::symlink_metadata(&backup).is_ok() {
-            ensure_safe_path_components(&backup)?;
-            fs::rename(&backup, &installed)
+            restore_addon_backup(&backup, &installed)
                 .map_err(|_| format!("Could not restore backup for {}", addon.name))?;
         }
     }
@@ -1507,7 +1805,7 @@ fn install_staged_addons(
     folders: &[String],
     release: u64,
     patch_version: &str,
-) -> Result<(), String> {
+) -> Result<bool, String> {
     if folders.iter().any(|name| !validate_addon_name(name)) {
         return Err("Addons.zip contains an invalid addon folder".into());
     }
@@ -1518,6 +1816,7 @@ fn install_staged_addons(
         patch_version: patch_version.into(),
         addons: Vec::new(),
     });
+    let legacy_addons = legacy_addons_for_game(app, game_dir)?;
 
     let rollback = addons_dir.join(format!(".rx-rollback-{}", std::process::id()));
     if rollback.exists() {
@@ -1530,6 +1829,8 @@ fn install_staged_addons(
     let mut installed_names: Vec<String> = Vec::new();
     let mut restored_backups: Vec<(String, String)> = Vec::new();
     let mut created_backups: Vec<(String, String)> = Vec::new();
+    let mut created_preserved_backups: Vec<String> = Vec::new();
+    let mut prepared_backups: Vec<(String, Option<String>)> = Vec::new();
 
     let result = (|| {
         // Stage launcher-owned directories before mutation so later changes can roll back.
@@ -1543,16 +1844,77 @@ fn install_staged_addons(
                             addon.name
                         ));
                     }
+                    let (backup_name, created) =
+                        preserve_modified_addon_files(addons_dir, &current, addon)?;
+                    if created {
+                        if let Some(name) = &backup_name {
+                            created_preserved_backups.push(name.clone());
+                        }
+                    }
+                    prepared_backups.push((addon.name.clone(), backup_name));
                     fs::rename(&current, rollback.join(&addon.name)).map_err(|_| {
                         format!("Could not prepare addon {} for replacement", addon.name)
                     })?;
                 }
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                    prepared_backups.push((addon.name.clone(), addon.backup_name.clone()));
+                }
                 Err(_) => {
                     return Err(format!(
                         "Could not prepare addon {} for replacement",
                         addon.name
                     ));
+                }
+            }
+        }
+
+        // The legacy manifest did not contain file hashes. Compare legacy
+        // folders with the authenticated staged release so only files that
+        // match the new signed content are treated as launcher-owned. Any
+        // other files are preserved in the existing user backup overlay.
+        if let Some(legacy) = &legacy_addons {
+            for addon in legacy
+                .addons
+                .iter()
+                .filter(|addon| folders.contains(&addon.name))
+                .filter(|addon| !old.addons.iter().any(|old| old.name == addon.name))
+            {
+                let current = addons_dir.join(&addon.name);
+                let staged = stage.join(&addon.name);
+                let expected = InstalledAddon {
+                    name: addon.name.clone(),
+                    backup_name: addon.backup_name.clone(),
+                    files: collect_addon_files(&staged)?,
+                };
+                match fs::symlink_metadata(&current) {
+                    Ok(metadata) => {
+                        if is_link_or_reparse_point(&metadata) || !metadata.is_dir() {
+                            return Err(format!(
+                                "Could not prepare addon {} for replacement",
+                                addon.name
+                            ));
+                        }
+                        let (backup_name, created) =
+                            preserve_modified_addon_files(addons_dir, &current, &expected)?;
+                        if created {
+                            if let Some(name) = &backup_name {
+                                created_preserved_backups.push(name.clone());
+                            }
+                        }
+                        prepared_backups.push((addon.name.clone(), backup_name));
+                        fs::rename(&current, rollback.join(&addon.name)).map_err(|_| {
+                            format!("Could not prepare addon {} for replacement", addon.name)
+                        })?;
+                    }
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                        prepared_backups.push((addon.name.clone(), addon.backup_name.clone()));
+                    }
+                    Err(_) => {
+                        return Err(format!(
+                            "Could not prepare addon {} for replacement",
+                            addon.name
+                        ));
+                    }
                 }
             }
         }
@@ -1564,10 +1926,14 @@ fn install_staged_addons(
             .iter()
             .filter(|addon| !folders.contains(&addon.name))
         {
-            if let Some(backup_name) = &addon.backup_name {
+            let backup_name = prepared_backups
+                .iter()
+                .find(|(name, _)| name == &addon.name)
+                .and_then(|(_, backup_name)| backup_name.as_ref());
+            if let Some(backup_name) = backup_name {
                 let backup = addons_dir.join(backup_name);
-                if backup.exists() {
-                    fs::rename(&backup, addons_dir.join(&addon.name))
+                if fs::symlink_metadata(&backup).is_ok() {
+                    restore_addon_backup(&backup, &addons_dir.join(&addon.name))
                         .map_err(|_| format!("Could not restore backup for {}", addon.name))?;
                     restored_backups.push((addon.name.clone(), backup_name.clone()));
                 }
@@ -1577,12 +1943,18 @@ fn install_staged_addons(
         for name in folders {
             let current = addons_dir.join(name);
             let old_entry = old.addons.iter().find(|addon| addon.name == *name);
+            let prepared_backup = prepared_backups
+                .iter()
+                .find(|(prepared_name, _)| prepared_name == name)
+                .and_then(|(_, backup_name)| backup_name.clone());
             let current_metadata = match fs::symlink_metadata(&current) {
                 Ok(metadata) => Some(metadata),
                 Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
                 Err(_) => return Err(format!("Could not inspect addon {name}")),
             };
-            let backup_name = if let Some(entry) = old_entry {
+            let backup_name = if prepared_backup.is_some() {
+                prepared_backup
+            } else if let Some(entry) = old_entry {
                 entry.backup_name.clone()
             } else if let Some(metadata) = current_metadata {
                 // Preserve a pre-existing user addon folder across install
@@ -1625,40 +1997,53 @@ fn install_staged_addons(
             patch_version: patch_version.into(),
             addons: manifest_addons,
         };
-        save_installed_addons(app, &manifest)
+        save_installed_addons(app, &manifest)?;
+        if legacy_addons.is_some() {
+            retire_legacy_addons(app, game_dir);
+        }
+        Ok::<bool, String>(legacy_addons.is_some())
     })();
 
-    if let Err(error) = result {
-        for name in installed_names.iter().rev() {
-            let current = addons_dir.join(name);
-            if current.exists() {
-                fs::remove_dir_all(&current).ok();
+    let legacy_migrated = match result {
+        Ok(value) => value,
+        Err(error) => {
+            for name in installed_names.iter().rev() {
+                let current = addons_dir.join(name);
+                if current.exists() {
+                    fs::remove_dir_all(&current).ok();
+                }
             }
-        }
-        for (name, backup_name) in restored_backups.iter().rev() {
-            let restored = addons_dir.join(name);
-            if restored.exists() {
-                fs::rename(restored, addons_dir.join(backup_name)).ok();
+            for (name, backup_name) in restored_backups.iter().rev() {
+                let restored = addons_dir.join(name);
+                if restored.exists() {
+                    fs::rename(restored, addons_dir.join(backup_name)).ok();
+                }
             }
-        }
-        for (name, backup_name) in created_backups.iter().rev() {
-            let backup = addons_dir.join(backup_name);
-            if backup.exists() && !addons_dir.join(name).exists() {
-                fs::rename(backup, addons_dir.join(name)).ok();
+            for (name, backup_name) in created_backups.iter().rev() {
+                let backup = addons_dir.join(backup_name);
+                if backup.exists() && !addons_dir.join(name).exists() {
+                    fs::rename(backup, addons_dir.join(name)).ok();
+                }
             }
-        }
-        for addon in &old.addons {
-            let prior = rollback.join(&addon.name);
-            if prior.exists() && !addons_dir.join(&addon.name).exists() {
-                fs::rename(prior, addons_dir.join(&addon.name)).ok();
+            for backup_name in created_preserved_backups.iter().rev() {
+                let backup = addons_dir.join(backup_name);
+                if fs::symlink_metadata(&backup).is_ok() {
+                    fs::remove_dir_all(backup).ok();
+                }
             }
+            for addon in &old.addons {
+                let prior = rollback.join(&addon.name);
+                if prior.exists() && !addons_dir.join(&addon.name).exists() {
+                    fs::rename(prior, addons_dir.join(&addon.name)).ok();
+                }
+            }
+            fs::remove_dir_all(&rollback).ok();
+            return Err(error);
         }
-        fs::remove_dir_all(&rollback).ok();
-        return Err(error);
-    }
+    };
     fs::remove_dir_all(&rollback)
         .map_err(|_| "Could not clean addon rollback directory".to_string())?;
-    Ok(())
+    Ok(legacy_migrated)
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -1709,7 +2094,26 @@ fn read_installed_content(
     };
     let text = match fs::read_to_string(path) {
         Ok(text) => text,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            let Some(legacy_path) = legacy_state_path(app, INSTALLED_CONTENT_FILENAME) else {
+                return Ok(None);
+            };
+            let legacy_text = match fs::read_to_string(&legacy_path) {
+                Ok(text) => text,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+                Err(_) => return Err("Could not read legacy content tracking data".into()),
+            };
+            let legacy: InstalledContentManifest = match serde_json::from_str(&legacy_text) {
+                Ok(manifest) => manifest,
+                Err(_) => return Ok(None),
+            };
+            if !installed_content_matches_game(&legacy, &canonical_path) {
+                return Ok(None);
+            }
+            save_installed_content(app, &legacy)?;
+            fs::remove_file(legacy_path).ok();
+            return Ok(Some(legacy));
+        }
         Err(_) => return Err("Could not read content tracking data".into()),
     };
     let manifest: InstalledContentManifest = match serde_json::from_str(&text) {
@@ -1821,7 +2225,12 @@ fn remove_obsolete_content(
 }
 
 #[tauri::command]
-fn uninstall_patch(app: tauri::AppHandle, game_path: String) -> Result<String, String> {
+async fn uninstall_patch(
+    app: tauri::AppHandle,
+    operations: tauri::State<'_, OperationLock>,
+    game_path: String,
+) -> Result<String, String> {
+    let _operation = operations.try_acquire().await?;
     let dir = validate_game_path(&game_path)?;
     let manifest = read_installed_addons(&app, &dir)?;
     let content_manifest = read_installed_content(&app, &dir)?;
@@ -1969,8 +2378,10 @@ fn verify_patch_files(
 async fn verify_patch(
     app: tauri::AppHandle,
     http: tauri::State<'_, HttpClient>,
+    operations: tauri::State<'_, OperationLock>,
     game_path: String,
 ) -> Result<Vec<String>, String> {
+    let _operation = operations.try_acquire().await?;
     let dir = validate_game_path(&game_path)?;
     let manifest = fetch_content_manifest(&app, &http.0).await?;
     let installed_addons = read_installed_addons(&app, &dir)?;
@@ -2008,7 +2419,15 @@ fn check_realmlist(game_path: String) -> Result<String, String> {
 }
 
 #[tauri::command]
-fn patch_realmlist(game_path: String) -> Result<String, String> {
+async fn patch_realmlist(
+    operations: tauri::State<'_, OperationLock>,
+    game_path: String,
+) -> Result<String, String> {
+    let _operation = operations.try_acquire().await?;
+    patch_realmlist_inner(game_path)
+}
+
+fn patch_realmlist_inner(game_path: String) -> Result<String, String> {
     let dir = validate_game_path(&game_path)?;
     let base = dir.join("Data");
     if !base.is_dir() {
@@ -2124,6 +2543,7 @@ pub fn run() {
 
     builder
         .manage(HttpClient(http_client))
+        .manage(OperationLock::default())
         .setup(|app| {
             // Create the app config directory before the frontend uses the
             // scoped filesystem plugin. The plugin cannot authorize a
@@ -2293,7 +2713,7 @@ mod tests {
         let realmlist = data.join("realmlist.wtf");
         fs::write(&realmlist, b"set realmlist old.example").unwrap();
 
-        patch_realmlist(temp.0.to_string_lossy().into_owned()).unwrap();
+        patch_realmlist_inner(temp.0.to_string_lossy().into_owned()).unwrap();
 
         assert_eq!(fs::read_to_string(realmlist).unwrap(), REALMLIST_VALUE);
     }
@@ -2308,7 +2728,7 @@ mod tests {
         fs::write(&outside, b"protected").unwrap();
         symlink(&outside, data.join("realmlist.wtf")).unwrap();
 
-        assert!(patch_realmlist(temp.0.to_string_lossy().into_owned()).is_err());
+        assert!(patch_realmlist_inner(temp.0.to_string_lossy().into_owned()).is_err());
         assert_eq!(fs::read(&outside).unwrap(), b"protected");
     }
 
@@ -2322,7 +2742,7 @@ mod tests {
         fs::write(&wow, b"protected executable").unwrap();
         fs::hard_link(&wow, data.join("realmlist.wtf")).unwrap();
 
-        patch_realmlist(temp.0.to_string_lossy().into_owned()).unwrap();
+        patch_realmlist_inner(temp.0.to_string_lossy().into_owned()).unwrap();
 
         assert_eq!(fs::read(&wow).unwrap(), b"protected executable");
         assert_eq!(
@@ -2439,6 +2859,61 @@ mod tests {
     }
 
     #[test]
+    fn addon_update_preserves_modified_and_added_files() {
+        let temp = TestDir::new();
+        let addons_dir = temp.0.join("AddOns");
+        let addon_dir = addons_dir.join("Addon");
+        fs::create_dir_all(&addon_dir).unwrap();
+        fs::write(addon_dir.join("main.lua"), b"modified").unwrap();
+        fs::write(addon_dir.join("user.lua"), b"added by user").unwrap();
+        let addon = InstalledAddon {
+            name: "Addon".into(),
+            backup_name: None,
+            files: vec![InstalledAddonFile {
+                path: "main.lua".into(),
+                size: 8,
+                sha256: format!("{:x}", Sha256::digest(b"original")),
+            }],
+        };
+
+        let (backup_name, created) =
+            preserve_modified_addon_files(&addons_dir, &addon_dir, &addon).unwrap();
+        let backup = addons_dir.join(backup_name.unwrap());
+        assert!(created);
+        assert_eq!(fs::read(backup.join("main.lua")).unwrap(), b"modified");
+        assert_eq!(fs::read(backup.join("user.lua")).unwrap(), b"added by user");
+    }
+
+    #[test]
+    fn nested_addon_backup_restores_after_tracked_removal() {
+        let temp = TestDir::new();
+        let addons_dir = temp.0.join("AddOns");
+        let addon_dir = addons_dir.join("Addon");
+        let backup_dir = addons_dir.join(".rx-user-backup-Addon");
+        fs::create_dir_all(addon_dir.join("Libs")).unwrap();
+        fs::create_dir_all(backup_dir.join("Libs")).unwrap();
+        fs::write(addon_dir.join("Libs/main.lua"), b"installed").unwrap();
+        fs::write(backup_dir.join("Libs/main.lua"), b"user addon").unwrap();
+        let (size, sha256) = file_hash_and_size(&addon_dir.join("Libs/main.lua")).unwrap();
+        let addon = InstalledAddon {
+            name: "Addon".into(),
+            backup_name: Some(".rx-user-backup-Addon".into()),
+            files: vec![InstalledAddonFile {
+                path: "Libs/main.lua".into(),
+                size,
+                sha256,
+            }],
+        };
+
+        assert!(restore_tracked_addon(&addons_dir, &addon).unwrap());
+        assert_eq!(
+            fs::read(addon_dir.join("Libs/main.lua")).unwrap(),
+            b"user addon"
+        );
+        assert!(!backup_dir.exists());
+    }
+
+    #[test]
     fn url_allowlist_requires_https_and_exact_host() {
         assert!(is_allowed_url("https://projectrx.net/news"));
         assert!(is_allowed_url("https://www.projectrx.net/news"));
@@ -2489,7 +2964,7 @@ mod tests {
         let temp = TestDir::new();
         fs::create_dir(temp.0.join("Data")).unwrap();
 
-        let result = patch_realmlist(temp.0.to_string_lossy().into_owned()).unwrap();
+        let result = patch_realmlist_inner(temp.0.to_string_lossy().into_owned()).unwrap();
 
         assert_eq!(result, "Realmlist created and set successfully");
         assert_eq!(

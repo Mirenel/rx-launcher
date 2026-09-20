@@ -251,6 +251,8 @@ window.addEventListener("DOMContentLoaded", function () {
     browseBtn.disabled = active;
     patchBtn.disabled = active || !hasGamePath;
     downloadBtn.disabled = active || !patchManifestReady || !hasGamePath || downloading;
+    repairBtn.disabled = active;
+    uninstallBtn.disabled = active;
     playBtn.disabled = active || !hasGamePath || !runtimeReady || downloading;
   }
 
@@ -695,7 +697,7 @@ window.addEventListener("DOMContentLoaded", function () {
   var downloading = false;
   function startPatchDownload(force) {
     if (!hasGamePath) return;
-    if (downloading) return;
+    if (downloading || gameOperationActive) return;
     if (!force && downloadBtn.disabled) return;
     var gamePath = settings.game_path;
     if (!gamePath) return;
@@ -787,7 +789,7 @@ window.addEventListener("DOMContentLoaded", function () {
   });
 
   repairBtn.addEventListener('click', function () {
-    if (!hasGamePath) return;
+    if (!hasGamePath || downloading || gameOperationActive) return;
     showModal(repairModal);
   });
 
@@ -799,6 +801,7 @@ window.addEventListener("DOMContentLoaded", function () {
   });
 
   repairConfirm.addEventListener('click', function () {
+    if (!hasGamePath || downloading || gameOperationActive) return;
     hideModal(repairModal);
     startPatchDownload(true);
   });
@@ -1015,16 +1018,18 @@ window.addEventListener("DOMContentLoaded", function () {
         winePrefix: settings.wine_prefix || null
       });
     }).then(function () {
-      setGameOperationActive(false);
       if (!settings.keep_open) {
         tauriProcess.exit(0).catch(function () {
+          setGameOperationActive(false);
           showToast('Could not close the launcher');
         });
       } else if (settings.minimize_to_tray) {
+        setGameOperationActive(false);
         appWindow.hide().catch(function () {
           showToast('Could not hide the launcher to the system tray');
         });
       } else {
+        setGameOperationActive(false);
         showToast('Game launched');
       }
     }).catch(function (e) {
